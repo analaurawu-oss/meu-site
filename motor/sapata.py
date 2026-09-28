@@ -333,6 +333,145 @@ def interpolar_abaco(u,m,tipo):
     vals=np.array([np.interp(m,ms,row) for row in z])
     return float(np.interp(u,us,vals))
 
+
+# =====================================================================
+# ENVOLTÓRIA RESISTENTE N × M (ELU) — substitui a leitura do ábaco
+# Seção de concreto + barras discretas, por compatibilidade de
+# deformações (ABNT NBR 6118:2023, itens 8.2.10.1, 8.3.6 e 17.2.2):
+#   - concreto: diagrama parábola-retângulo, sem resistência à tração;
+#   - aço: elastoplástico perfeito (Es = 210 GPa), εsu = 10 ‰;
+#   - estados-limite últimos pelos polos A (ε aço = 10 ‰), B (εcu) e C (εc2).
+# Convenção: compressão positiva; tensões em kgf/cm², forças em kgf,
+# comprimentos em cm e momentos em kgf·cm dentro deste bloco.
+# =====================================================================
+ES_KGF_CM2 = 2100000.0
+EPS_SU = 0.010
+
+
+def parametros_concreto(fck_mpa):
+    # NBR 6118:2023, 8.2.10.1 — εc2, εcu e expoente n (fck em MPa).
+    if fck_mpa <= 50:
+        return 0.002, 0.0035, 2.0
+    k = (90 - fck_mpa) / 100
+    return 0.002 + 0.000085 * (fck_mpa - 50) ** 0.53, 0.0026 + 0.035 * k ** 4, 1.4 + 23.4 * k ** 4
+
+
+def secao_circular(diametro_cm, n_faixas=240):
+    # Faixas horizontais: ordenada do centro (cm) e área (cm²).
+    r = diametro_cm / 2
+    bordas = np.linspace(-r, r, n_faixas + 1)
+    y = (bordas[:-1] + bordas[1:]) / 2
+    area = 2 * np.sqrt(np.maximum(r * r - y * y, 0.0)) * np.diff(bordas)
+    return y, area
+
+
+def secao_quadrada(lado_cm, diagonal=False, n_faixas=240):
+    # Flexão em torno do eixo principal (diagonal=False) ou da diagonal.
+    if not diagonal:
+        bordas = np.linspace(-lado_cm / 2, lado_cm / 2, n_faixas + 1)
+        y = (bordas[:-1] + bordas[1:]) / 2
+        return y, np.full_like(y, lado_cm * lado_cm / n_faixas)
+    c = lado_cm / math.sqrt(2)
+    bordas = np.linspace(-c, c, n_faixas + 1)
+    y = (bordas[:-1] + bordas[1:]) / 2
+    return y, 2 * (c - np.abs(y)) * np.diff(bordas)
+
+
+def barras_circulares(n, raio_cm, giro=0.0):
+    # Ordenadas das n barras distribuídas no círculo de raio raio_cm.
+    ang = giro + 2 * math.pi * np.arange(n) / n
+    return raio_cm * np.sin(ang)
+
+
+def barras_quadradas(n, lado_util_cm, diagonal=False):
+    # n múltiplo de 4, cantos incluídos, espaçamento igual no perímetro.
+    c = lado_util_cm
+    s = 4 * c * np.arange(n) / n
+    lado, t = np.floor(s / c), s % c
+    x = np.select([lado == 0, lado == 1, lado == 2], [-c / 2 + t, c / 2 + 0 * t, c / 2 - t], -c / 2 + 0 * t)
+    y = np.select([lado == 0, lado == 1, lado == 2], [-c / 2 + 0 * t, -c / 2 + t, c / 2 + 0 * t], c / 2 - t)
+    return (x + y) / math.sqrt(2) if diagonal else y
+
+
+class Envoltoria:
+    # Pré-calcula, ao longo do contorno último (t de 0 a 3), as parcelas
+    # do concreto (Nc, Mc) e as do aço por cm² de armadura (ns, ms).
+    # Assim, para qualquer As: N(t) = Nc + As·ns e M(t) = Mc + As·ms.
+    def __init__(self, y_conc, a_conc, y_barras, sigma_cd, fyd, fck_mpa, n_pontos=900):
+        ec2, ecu, nexp = parametros_concreto(fck_mpa)
+        passo = float(y_conc[1] - y_conc[0])
+        ymax_c, ymin_c = float(np.max(y_conc)) + passo / 2, float(np.min(y_conc)) - passo / 2
+        h = ymax_c - ymin_c
+        d = ymax_c - float(np.min(y_barras))
+        t = np.linspace(0.0, 3.0, n_pontos)
+        # deformação no topo (ymax_c) e curvatura para cada t
+        e_topo = np.empty_like(t)
+        curv = np.empty_like(t)
+        a = t <= 1
+        e_topo[a] = -EPS_SU + t[a] * (ecu + EPS_SU)
+        curv[a] = (e_topo[a] + EPS_SU) / d
+        b = (t > 1) & (t <= 2)
+        xa = ecu / (ecu + EPS_SU) * d
+        x = xa + (t[b] - 1) * (h - xa)
+        e_topo[b] = ecu
+        curv[b] = ecu / x
+        c = t > 2
+        e_base = (t[c] - 2) * ec2
+        hc = (1 - ec2 / ecu) * h
+        curv[c] = (ec2 - e_base) / (h - hc)
+        e_topo[c] = ec2 + curv[c] * hc
+        self.t, self.e_topo, self.curv, self.ymax = t, e_topo, curv, ymax_c
+        eps_c = e_topo[:, None] - curv[:, None] * (ymax_c - y_conc[None, :])
+        ec = np.clip(eps_c, 0.0, ec2)
+        sig_c = np.where(eps_c > 0, sigma_cd * (1 - (1 - ec / ec2) ** nexp), 0.0)
+        self.Nc = sig_c @ a_conc
+        self.Mc = sig_c @ (a_conc * y_conc)
+        eps_s = e_topo[:, None] - curv[:, None] * (ymax_c - y_barras[None, :])
+        sig_s = np.clip(ES_KGF_CM2 * eps_s, -fyd, fyd)
+        nb = len(y_barras)
+        self.ns = sig_s.sum(axis=1) / nb
+        self.ms = (sig_s @ y_barras) / nb
+
+    def curva(self, As):
+        return self.Nc + As * self.ns, self.Mc + As * self.ms
+
+    def momento_resistente(self, Nd, As):
+        # MRd (kgf·cm) para o esforço normal Nd (kgf); -inf se Nd fora da envoltória.
+        N, M = self.curva(As)
+        if not (N[0] <= Nd <= N[-1]):
+            return -math.inf
+        i = int(np.searchsorted(N, Nd))
+        i = min(max(i, 1), len(N) - 1)
+        n0, n1 = N[i - 1], N[i]
+        f = 0.0 if n1 == n0 else (Nd - n0) / (n1 - n0)
+        return float(M[i - 1] + f * (M[i] - M[i - 1]))
+
+    def as_necessaria(self, Nd, Md, as_max):
+        # Menor As (cm²) com (Nd, |Md|) dentro da envoltória; None se > as_max.
+        Md = abs(Md)
+        if self.momento_resistente(Nd, 0.0) >= Md:
+            return 0.0
+        if self.momento_resistente(Nd, as_max) < Md:
+            return None
+        lo, hi = 0.0, as_max
+        for _ in range(60):
+            m = (lo + hi) / 2
+            if self.momento_resistente(Nd, m) >= Md:
+                hi = m
+            else:
+                lo = m
+        return hi
+
+
+def envoltoria_pontos(env, As, n=60):
+    # Pontos (Nd kgf, Md kgf·m) do ramo positivo da envoltória, para gráfico/relatório.
+    N, M = env.curva(As)
+    idx = np.unique(np.linspace(0, len(N) - 1, n).astype(int))
+    return [[float(N[i]), float(M[i]) / 100] for i in idx]
+
+# Método do N1 do fuste: "envoltoria" (compatibilidade de deformações) ou "abaco" (planilha).
+METODO_N1 = "envoltoria"
+
 def ks_por_kc(kc):
     t=TABELAS['kc_ks'];fck=MATERIAIS['fck_kgf_cm2']
     if fck not in t['fck']:
@@ -402,10 +541,28 @@ def escolher_estribos(s):
     melhor=dict(melhor,comprimento_m=comp)
     return melhor,df
 
-def dimensionar_fuste(s,stub):
+def _barras_fuste(a_cm, phi_mm, phi_estribo_mm):
+    # Lado do quadrado que passa pelo centro das barras N1 (cm).
+    return a_cm - 2 * (MATERIAIS['cob_cm'] + phi_estribo_mm / 10 + phi_mm / 20)
+
+
+def _envoltorias_fuste(a_cm, n, lado_util, sigma_cd, fyd):
+    # Flexão em torno do eixo principal e da diagonal (direção mais desfavorável).
+    return [Envoltoria(*secao_quadrada(a_cm, diag), barras_quadradas(n, lado_util, diag), sigma_cd, fyd, MATERIAIS['fck_mpa'])
+            for diag in (False, True)]
+
+
+def dimensionar_fuste(s,stub,phi_estribo_mm=6.3):
     a=s['a'];ell=s['Lf']+s['gmax'];fck=MATERIAIS['fck_kgf_cm2']
     fcd=arred(.85*fck/MATERIAIS['gamma_c']);fyd=MATERIAIS['fyk_kgf_cm2']/MATERIAIS['gamma_s']
-    lam=2*ell/(a/math.sqrt(12));linhas=[];cel={}
+    fck_mpa=MATERIAIS['fck_mpa'];a_cm=a*100
+    # fcd acima já inclui 0,85; acima de C50 aplica o αc da NBR 6118:2023.
+    sigma_cd=fcd if fck_mpa<=50 else fcd*(1-(fck_mpa-50)/200)
+    phi=s['barra_fuste_mm'];lado_util=_barras_fuste(a_cm,phi,phi_estribo_mm)
+    usar_envoltoria=METODO_N1!='abaco'
+    envs=_envoltorias_fuste(a_cm,40,lado_util,sigma_cd,fyd) if usar_envoltoria else None
+    as_max=.08*a_cm**2
+    lam=2*ell/(a/math.sqrt(12));linhas=[];cel={};casos=[]
     for tipo,cargas in [('tracao',CARGAS_TRACAO),('compressao',CARGAS_COMPRESSAO)]:
         for i,ca in enumerate(cargas):
             nd=ca['vertical_kgf']*COEF_ESTR
@@ -419,21 +576,57 @@ def dimensionar_fuste(s,stub):
                     curva=min(.005/(a*(nu+.5)),.005/a)
                     md_adot=max(md,.9*md+nd*(2*ell)**2/10*curva)
             mu=md_adot*100/(fcd*(a*100)**3)
-            omega=interpolar_abaco(nu,mu,tipo)
-            ascalc=omega*fcd/fyd*(a*100)**2
+            try:
+                omega_abaco=interpolar_abaco(nu,mu,tipo)
+            except ValueError:
+                if not usar_envoltoria:raise
+                omega_abaco=None
+            if usar_envoltoria:
+                Nd=nd if tipo=='compressao' else -nd
+                as_dir=[env.as_necessaria(Nd,md_adot*100,as_max) for env in envs]
+                if any(x is None for x in as_dir):
+                    raise ValueError(f'Fuste: hipótese {ca["hipotese"]} ({tipo}) exige As > 8% da seção — aumentar o lado a.')
+                ascalc=max(as_dir);omega=ascalc*fyd/(fcd*a_cm**2)
+                casos.append(dict(Nd=Nd,Md=md_adot,hipotese=ca['hipotese'],tipo=tipo))
+            else:
+                omega=omega_abaco;ascalc=omega*fcd/fyd*(a*100)**2
             linhas.append(dict(tipo=tipo,hipotese=ca['hipotese'],Nd_kgf=nd,Md1_kgfm=md,Md_adot_kgfm=md_adot,
-                               lambda_=lam,lambda_lim=lim,nu=nu,mu=mu,omega=omega,As_calc_cm2=ascalc))
+                               lambda_=lam,lambda_lim=lim,nu=nu,mu=mu,omega=omega,omega_abaco=omega_abaco,As_calc_cm2=ascalc))
             cel['BCDE'[i]+str(259 if tipo=='tracao' else 275)]=md
             cel['BCDE'[i]+str(267 if tipo=='tracao' else 283)]=ascalc
-    tb=pd.DataFrame(linhas);req=max(.004*(a*100)**2,tb.As_calc_cm2.max());phi=s['barra_fuste_mm']
+    tb=pd.DataFrame(linhas);req=max(.004*(a*100)**2,tb.As_calc_cm2.max())
     # Quatro faces: quantidade múltipla de quatro, mínimo quatro barras.
-    n=max(4,int(acima(req/area_barra(phi),4)));asad=n*area_barra(phi)
+    n=max(4,int(acima(req/area_barra(phi),4)))
+    verif=None
+    if usar_envoltoria:
+        # Verificação com as barras reais; acrescenta 4 barras até atender.
+        while True:
+            ev=_envoltorias_fuste(a_cm,n,lado_util,sigma_cd,fyd);As=n*area_barra(phi);pior=None
+            for c in casos:
+                mrd=min(e.momento_resistente(c['Nd'],As) for e in ev)/100
+                u=math.inf if mrd<=0 else c['Md']/mrd
+                if pior is None or u>pior['utilizacao']:pior=dict(caso=c,MRd_kgfm=mrd,utilizacao=u)
+            if pior['utilizacao']<=1 or As>as_max:break
+            n+=4
+        verif=pior
+        gov=tb.loc[tb.As_calc_cm2.idxmax()]
+        print(f"Fuste {s.get('nome', '')} | N1 pela envoltória N×M (NBR 6118), eixo principal e diagonal | Ø {phi:g} mm")
+        for l in linhas:
+            print(f"   {l['tipo']:<10} {str(l['hipotese']):<10} Nd = {l['Nd_kgf']:>9.0f} kgf  Md = {l['Md_adot_kgfm']:>9.0f} kgf·m  ->  As = {l['As_calc_cm2']:6.2f} cm²"
+                  + (f"  (ábaco {l['omega_abaco']*fcd/fyd*a_cm**2:6.2f})" if l['omega_abaco'] is not None else ''))
+        print(f"   Governa {gov.tipo} {gov.hipotese}: As = {gov.As_calc_cm2:.2f} cm² | As,req = {req:.2f} cm² | adotado {n} Ø {phi:g}"
+              f" | pior {pior['caso']['hipotese']}: Md = {pior['caso']['Md']:.0f} ≤ MRd = {pior['MRd_kgfm']:.0f} kgf·m (utilização {pior['utilizacao']:.2f})")
+    asad=n*area_barra(phi)
     arm=dict(phi_mm=phi,n=n,As_cm2=asad,As_req_cm2=req,
              esp_cm=4*(a*100-2*MATERIAIS['cob_cm'])/n,
              transpasse_cm=transpasse(phi,tb.As_calc_cm2.max(),asad))
+    if verif:
+        arm.update(metodo='Envoltória N×M — NBR 6118',MRd_kgfm=verif['MRd_kgfm'],utilizacao=verif['utilizacao'],
+                   hipotese_verificacao=verif['caso']['hipotese'],
+                   envoltoria=envoltoria_pontos(min(_envoltorias_fuste(a_cm,n,lado_util,sigma_cd,fyd),
+                                                    key=lambda e:e.momento_resistente(verif['caso']['Nd'],asad)),asad))
     cel.update(H259=asad,H261=arm['transpasse_cm'])
     return tb,arm,cel
-
 
 
 def verificar_puncao(s,tfuste):
@@ -489,8 +682,8 @@ def quantitativos(s,stub,n1,n2,base):
 
 def calcular_sapata(s,stub):
     geo,cel=verificar_geotecnia(s)
-    b,armb,cb=dimensionar_base(s);f,n1,cf=dimensionar_fuste(s,stub)
-    n2,op=escolher_estribos(s);pun,cp=verificar_puncao(s,f)
+    b,armb,cb=dimensionar_base(s);n2,op=escolher_estribos(s)
+    f,n1,cf=dimensionar_fuste(s,stub,n2['phi_mm']);pun,cp=verificar_puncao(s,f)
     qt,fixo=quantitativos(s,stub,n1,n2,armb)
     cel.update(cb);cel.update(cf);cel.update(cp)
     cel['B326']=n2['Vsw_kgf'];cel['B337']=n2['As_metro_cm2']/n2['As_min_cm2']
@@ -532,8 +725,9 @@ def _minimo(df, col):
     return float(v.loc[i]), str(df.loc[i, "hipotese"])
 
 def rodar(entrada_json):
-    global NOME_TORRE, COEF_GEO, COEF_ESTR, MATERIAIS, CARGAS_COMPRESSAO, CARGAS_TRACAO, STUB_DADOS
+    global NOME_TORRE, COEF_GEO, COEF_ESTR, MATERIAIS, CARGAS_COMPRESSAO, CARGAS_TRACAO, STUB_DADOS, METODO_N1
     e = json.loads(entrada_json)
+    METODO_N1 = e.get("metodo_n1", "envoltoria")
     NOME_TORRE = e["nome_torre"]
     COEF_GEO = float(e["coef_geo"]); COEF_ESTR = float(e["coef_estr"])
     MATERIAIS = e["materiais"]
@@ -567,6 +761,7 @@ def rodar(entrada_json):
             res["puncao"] = _st(fsp >= 1)
             res["situacao"] = _st(all(res[k] == "ATENDE" for k in ["compressao", "deslizamento", "arrancamento", "tombamento", "puncao", "rigidez"]))
             res.update(N1_phi_mm=n1["phi_mm"], N1_n=n1["n"], N1_As_cm2=n1["As_cm2"], N1_As_req_cm2=n1["As_req_cm2"], N1_esp_cm=n1["esp_cm"], N1_transpasse_cm=n1["transpasse_cm"],
+                       N1_metodo=n1.get("metodo", "Ábaco"), N1_MRd_kgfm=n1.get("MRd_kgfm"), N1_utilizacao=n1.get("utilizacao"), N1_hip_verificacao=n1.get("hipotese_verificacao"), N1_envoltoria=n1.get("envoltoria"),
                        N2_phi_mm=n2["phi_mm"], N2_esp_cm=n2["esp_cm"], N2_Vd_kgf=n2["Vd_kgf"], N2_Vsw_kgf=n2["Vsw_kgf"], N2_Vc_kgf=n2["Vc_kgf"], N2_VRd2_kgf=n2["VRd2_kgf"], N2_comp_m=n2["comprimento_m"],
                        base_phi_mm=ab["N4"]["phi_mm"], base_n=ab["N4"]["n_por_direcao"], base_As_cm2=ab["N4"]["As_cm2"], base_esp_cm=ab["N4"]["esp_cm"],
                        N3_transpasse_cm=ab["N3"]["transpasse_cm"], N4_transpasse_cm=ab["N4"]["transpasse_cm"])
