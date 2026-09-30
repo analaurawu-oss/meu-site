@@ -700,8 +700,8 @@ def _mxmy_tubulao(casos, as_casos, geometria, n_barras, raio, area_barra_cm2, si
         item = {"tipo": t, "hipotese": c["hipotese"], "Nd_kgf": c["Nd"], "pontos": pts, "secoes": []}
         # Seções do fuste: topo, intermediária (média linear) e base = seção crítica
         # (profundidade do momento máximo), esta já com a 2ª ordem quando houver.
-        m_topo, m_base1 = abs(c["m_topo"]), abs(c["md1"])
-        for nome, m in (("topo", m_topo), ("intermediária", (m_topo + m_base1) / 2), ("base", abs(c["md"]))):
+        # diagrama linear de 1ª ordem entre topo (−V·e_v + H·e_h) e base: média com sinal
+        for nome, m in (("topo", abs(c["m_topo"])), ("intermediária", abs(c["m_topo"] + c["md1"]) / 2), ("base", abs(c["md"]))):
             mx, my = _componentes_mxmy(m, c["ht"], c["hl"])
             item["secoes"].append({"secao": nome, "M_kgfm": m, "Mx_kgfm": mx, "My_kgfm": my})
         if t == "compressão":
