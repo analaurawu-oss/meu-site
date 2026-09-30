@@ -386,8 +386,8 @@ def barras_circulares(n, raio_cm, giro=0.0):
 def barras_quadradas(n, lado_util_cm, diagonal=False):
     # n múltiplo de 4, cantos incluídos, espaçamento igual no perímetro.
     c = lado_util_cm
-    s = 4 * c * np.arange(n) / n
-    lado, t = np.floor(s / c), s % c
+    k = 4 * np.arange(n)
+    lado, t = k // n, (k % n) / n * c  # inteiros: evita barra de canto no lado errado
     x = np.select([lado == 0, lado == 1, lado == 2], [-c / 2 + t, c / 2 + 0 * t, c / 2 - t], -c / 2 + 0 * t)
     y = np.select([lado == 0, lado == 1, lado == 2], [-c / 2 + 0 * t, -c / 2 + t, c / 2 + 0 * t], c / 2 - t)
     return (x + y) / math.sqrt(2) if diagonal else y
@@ -599,15 +599,12 @@ def dimensionar_fuste(s,stub,phi_estribo_mm=6.3):
     n=max(4,int(acima(req/area_barra(phi),4)))
     verif=None
     if usar_envoltoria:
-        # Verificação com as barras reais; acrescenta 4 barras até atender.
-        while True:
-            ev=_envoltorias_fuste(a_cm,n,lado_util,sigma_cd,fyd);As=n*area_barra(phi);pior=None
-            for c in casos:
-                mrd=min(e.momento_resistente(c['Nd'],As) for e in ev)/100
-                u=math.inf if mrd<=0 else c['Md']/mrd
-                if pior is None or u>pior['utilizacao']:pior=dict(caso=c,MRd_kgfm=mrd,utilizacao=u)
-            if pior['utilizacao']<=1 or As>as_max:break
-            n+=4
+        # As barras saem da As da envoltória; aqui só se informa o MRd das barras adotadas.
+        ev=_envoltorias_fuste(a_cm,n,lado_util,sigma_cd,fyd);As=n*area_barra(phi);pior=None
+        for c in casos:
+            mrd=min(e.momento_resistente(c['Nd'],As) for e in ev)/100
+            u=math.inf if mrd<=0 else c['Md']/mrd
+            if pior is None or u>pior['utilizacao']:pior=dict(caso=c,MRd_kgfm=mrd,utilizacao=u)
         verif=pior
         gov=tb.loc[tb.As_calc_cm2.idxmax()]
         print(f"Fuste {s.get('nome', '')} | N1 pela envoltória N×M (NBR 6118), eixo principal e diagonal | Ø {phi:g} mm")

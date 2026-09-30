@@ -473,8 +473,8 @@ def barras_circulares(n, raio_cm, giro=0.0):
 def barras_quadradas(n, lado_util_cm, diagonal=False):
     # n múltiplo de 4, cantos incluídos, espaçamento igual no perímetro.
     c = lado_util_cm
-    s = 4 * c * np.arange(n) / n
-    lado, t = np.floor(s / c), s % c
+    k = 4 * np.arange(n)
+    lado, t = k // n, (k % n) / n * c  # inteiros: evita barra de canto no lado errado
     x = np.select([lado == 0, lado == 1, lado == 2], [-c / 2 + t, c / 2 + 0 * t, c / 2 - t], -c / 2 + 0 * t)
     y = np.select([lado == 0, lado == 1, lado == 2], [-c / 2 + 0 * t, -c / 2 + t, c / 2 + 0 * t], c / 2 - t)
     return (x + y) / math.sqrt(2) if diagonal else y
@@ -564,12 +564,36 @@ def alfa_c(fck_mpa):
 
 def _casos_n1(solo, geometria, materiais, fatores, cargas_compressao, cargas_tracao, excentricidade_vertical_mm, excentricidade_horizontal_mm):
     # Esforços de cálculo de todas as hipóteses: Nd > 0 compressão, Nd < 0 tração.
+    # Na compressão aplica M1d,mín (NBR 6118, 11.3.3.4.3) e o efeito local de
+    # 2ª ordem pelo pilar-padrão com curvatura aproximada (15.8.3.3.2), com o
+    # fuste tratado como balanço engastado na profundidade do momento máximo.
+    d_m = geometria.diametro_m
+    area_cm2 = math.pi * (d_m * 100) ** 2 / 4
     casos = []
     for tipo, sinal, cargas in (("compressão", 1, cargas_compressao), ("tração", -1, cargas_tracao)):
         for carga in cargas:
             nd = arred_excel(carga.vertical_kgf * materiais.coef_estrutural, 0)
             md = momento_no_fuste(carga, solo, geometria, materiais, fatores["Kp"], excentricidade_vertical_mm, excentricidade_horizontal_mm)
-            casos.append({"tipo": tipo, "hipotese": carga.hipotese, "nd": nd, "Nd": sinal * nd, "md": md})
+            c = {"tipo": tipo, "hipotese": carga.hipotese, "nd": nd, "Nd": sinal * nd, "md": md, "md1": md,
+                 "m1d_min": 0.0, "lambda": 0.0, "lambda_lim": 0.0, "m2d": 0.0}
+            if tipo == "compressão" and nd > 0:
+                m1 = max(abs(md), nd * (0.015 + 0.03 * d_m))
+                h = carga.horizontal_kgf
+                ell = geometria.afloramento_max_m + (0.545 * math.sqrt(h / (solo.gamma_kgf_m3 * d_m * fatores["Kp"])) if h > 0 else 0.0)
+                le = 2 * ell
+                lam = le / (d_m / 4)
+                lam_lim = min(90.0, max(35.0, (25 + 12.5 * (m1 / nd) / d_m) / 0.9))  # αb = 0,90 (balanço)
+                if lam > 90:
+                    raise ValueError(f"Hipótese {carga.hipotese}: esbeltez do fuste λ = {lam:.1f} > 90 — método de 2ª ordem não habilitado.")
+                m2 = 0.0
+                md_tot = m1
+                if lam > lam_lim:
+                    nu_nbr = nd / (area_cm2 * materiais.fcd_mpa * 10)
+                    curvatura = min(0.005 / (d_m * (nu_nbr + 0.5)), 0.005 / d_m)
+                    m2 = nd * le ** 2 / 10 * curvatura
+                    md_tot = max(m1, 0.9 * m1 + m2)
+                c.update(md=md_tot, m1d_min=nd * (0.015 + 0.03 * d_m), **{"lambda": lam, "lambda_lim": lam_lim, "m2d": m2})
+            casos.append(c)
     return casos
 
 
@@ -577,100 +601,46 @@ def _raio_barras_cm(geometria, materiais, bitola_mm, bitola_estribo_mm):
     return geometria.diametro_m * 100 / 2 - materiais.cobrimento_cm - bitola_estribo_mm / 10 - bitola_mm / 20
 
 
-def _classificar_espacamento(espacamento_cm, armaduras):
-    if armaduras.espacamento_longitudinal_ideal_min_cm <= espacamento_cm <= armaduras.espacamento_longitudinal_ideal_max_cm:
-        return "IDEAL", 0, abs(espacamento_cm - 11.0)
-    if armaduras.espacamento_longitudinal_min_cm <= espacamento_cm <= armaduras.espacamento_longitudinal_max_cm:
-        return "ACEITÁVEL", 1, min(abs(espacamento_cm - armaduras.espacamento_longitudinal_ideal_min_cm),
-                                   abs(espacamento_cm - armaduras.espacamento_longitudinal_ideal_max_cm))
-    return "REVER", 2, min(abs(espacamento_cm - armaduras.espacamento_longitudinal_min_cm),
-                           abs(espacamento_cm - armaduras.espacamento_longitudinal_max_cm))
-
-
-def _verificar_barras(casos, y_conc, a_conc, n_barras, raio_cm, area_barra_cm2, sigma_cd, fyd, fck_mpa):
-    # Verifica as barras reais (n, Ø) nas duas posições extremas do arranjo
-    # (barra no eixo de flexão ou entre barras) e devolve o pior caso.
+def _mrd_barras(env_args, n_barras, raio_cm, area_barra_cm2, Nd):
+    # MRd (kgf·m) das barras reais, na pior posição do arranjo (barra no
+    # eixo de flexão ou entre barras). Só para informar a utilização.
+    y_conc, a_conc, sigma_cd, fyd, fck_mpa = env_args
+    As = n_barras * area_barra_cm2
     envs = [Envoltoria(y_conc, a_conc, barras_circulares(n_barras, raio_cm, g), sigma_cd, fyd, fck_mpa)
             for g in (0.0, math.pi / n_barras)]
-    As = n_barras * area_barra_cm2
-    pior = None
-    for c in casos:
-        mrd = min(env.momento_resistente(c["Nd"], As) for env in envs) / 100
-        util = math.inf if mrd <= 0 else abs(c["md"]) / mrd
-        if pior is None or util > pior["utilizacao"]:
-            pior = {"caso": c, "MRd_kgfm": mrd, "utilizacao": util}
-    env_pior = min(envs, key=lambda e: e.momento_resistente(pior["caso"]["Nd"], As))
-    return pior, env_pior
-
-
-def selecionar_bitola_envoltoria(casos, geometria, materiais, armaduras, bitola_estribo_mm):
-    # Para cada bitola: As pela envoltória (anel denso de barras), número de
-    # barras pela área e pela faixa de espaçamento, e verificação final com as
-    # barras discretas — acrescenta barras até que todas as hipóteses atendam.
-    d_cm = geometria.diametro_m * 100
-    area_secao_cm2 = math.pi * d_cm ** 2 / 4
-    as_max = 0.08 * area_secao_cm2  # NBR 6118, 17.3.5.3.2
-    fyd = materiais.fyd_mpa * 10
-    sigma_cd = alfa_c(materiais.fck_mpa) * materiais.fcd_mpa * 10
-    y_conc, a_conc = secao_circular(d_cm)
-    as_minima = arred_excel(armaduras.taxa_minima_longitudinal * area_secao_cm2, 2)
-    alternativas = []
-
-    for bitola_mm in sorted(armaduras.bitolas_longitudinais_disponiveis_mm):
-        phi_cm = bitola_mm / 10
-        area_barra_cm2 = math.pi * phi_cm ** 2 / 4
-        raio = _raio_barras_cm(geometria, materiais, bitola_mm, bitola_estribo_mm)
-        anel = Envoltoria(y_conc, a_conc, barras_circulares(48, raio), sigma_cd, fyd, materiais.fck_mpa)
-        as_casos = []
-        for c in casos:
-            As = anel.as_necessaria(c["Nd"], c["md"] * 100, as_max)
-            if As is None:
-                raise ValueError(f"Hipótese {c['hipotese']} ({c['tipo']}): As > 8% da seção com Ø {bitola_mm:g} — aumentar o diâmetro.")
-            as_casos.append(As)
-        i_gov = int(np.argmax(as_casos))
-        as_calculada = arred_cima_excel(as_casos[i_gov], 2)
-        as_requerida = max(as_calculada, as_minima)
-
-        perimetro_util_cm = math.pi * (d_cm - 2 * materiais.cobrimento_cm - phi_cm - 2 * bitola_estribo_mm / 10)
-        n_por_area = int(arred_cima_excel(as_requerida / area_barra_cm2, 0))
-        n_para_faixa_ideal = math.ceil(perimetro_util_cm / armaduras.espacamento_longitudinal_ideal_max_cm)
-        n_barras = max(n_por_area, n_para_faixa_ideal, 6)
-        while True:
-            pior, env = _verificar_barras(casos, y_conc, a_conc, n_barras, raio, area_barra_cm2, sigma_cd, fyd, materiais.fck_mpa)
-            if pior["utilizacao"] <= 1 or n_barras * area_barra_cm2 > as_max:
-                break
-            n_barras += 1
-        espacamento_cm = arred_excel(perimetro_util_cm / n_barras, 1)
-        faixa, prioridade, distancia_ideal = _classificar_espacamento(espacamento_cm, armaduras)
-        as_adotada_cm2 = arred_excel(area_barra_cm2 * n_barras, 2)
-        alternativas.append({
-            "bitola_mm": bitola_mm, "area_barra_cm2": area_barra_cm2, "raio_barras_cm": raio,
-            "as_casos_cm2": as_casos, "caso_governante": casos[i_gov], "as_calculada_cm2": as_calculada,
-            "as_requerida_cm2": as_requerida, "n_por_area": n_por_area, "n_barras": n_barras,
-            "as_adotada_cm2": as_adotada_cm2, "espacamento_cm": espacamento_cm, "faixa": faixa,
-            "prioridade": prioridade if pior["utilizacao"] <= 1 else 3, "distancia_ideal": distancia_ideal,
-            "excesso_aco_cm2": as_adotada_cm2 - as_requerida, "verificacao": pior, "envoltoria": env,
-        })
-
-    if not alternativas:
-        raise ValueError("Informe ao menos uma bitola longitudinal disponível.")
-    escolhida = min(alternativas, key=lambda item: (item["prioridade"], item["excesso_aco_cm2"], item["distancia_ideal"], item["bitola_mm"]))
-    return escolhida, alternativas
+    env = min(envs, key=lambda e: e.momento_resistente(Nd, As))
+    return env.momento_resistente(Nd, As) / 100, env
 
 
 def dimensionar_n1_envoltoria(solo, geometria, materiais, fatores, cargas_compressao, cargas_tracao, armaduras, bitola_estribo_mm, excentricidade_vertical_mm, excentricidade_horizontal_mm):
+    # Uma única análise pela envoltória N×M define a As; as bitolas saem
+    # dessa área pelo mesmo critério da planilha (selecionar_bitola_longitudinal).
     casos = _casos_n1(solo, geometria, materiais, fatores, cargas_compressao, cargas_tracao, excentricidade_vertical_mm, excentricidade_horizontal_mm)
-    escolha, alternativas = selecionar_bitola_envoltoria(casos, geometria, materiais, armaduras, bitola_estribo_mm)
     d_cm = geometria.diametro_m * 100
     area_secao_cm2 = math.pi * d_cm ** 2 / 4
     sigma_cd = alfa_c(materiais.fck_mpa) * materiais.fcd_mpa * 10
     fyd = materiais.fyd_mpa * 10
+    y_conc, a_conc = secao_circular(d_cm)
+    env_args = (y_conc, a_conc, sigma_cd, fyd, materiais.fck_mpa)
+
+    # Barras de referência: maior bitola disponível (menor braço, a favor da segurança).
+    bitola_ref_mm = max(armaduras.bitolas_longitudinais_disponiveis_mm)
+    raio_ref = _raio_barras_cm(geometria, materiais, bitola_ref_mm, bitola_estribo_mm)
+    anel = Envoltoria(y_conc, a_conc, barras_circulares(48, raio_ref), sigma_cd, fyd, materiais.fck_mpa)
+    as_max = 0.08 * area_secao_cm2  # NBR 6118, 17.3.5.3.2
+    as_casos = []
+    for c in casos:
+        As = anel.as_necessaria(c["Nd"], c["md"] * 100, as_max)
+        if As is None:
+            raise ValueError(f"Hipótese {c['hipotese']} ({c['tipo']}): As > 8% da seção — aumentar o diâmetro.")
+        as_casos.append(As)
+    i_gov = int(np.argmax(as_casos))
+    gov = casos[i_gov]
 
     compressao = [c for c in casos if c["tipo"] == "compressão"]
-    tracao = [(c, a) for c, a in zip(casos, escolha["as_casos_cm2"]) if c["tipo"] == "tração"]
+    tracao = [(c, a) for c, a in zip(casos, as_casos) if c["tipo"] == "tração"]
     caso_c = max(compressao, key=lambda c: c["md"]) if compressao else {"hipotese": "", "nd": 0, "md": 0}
     caso_t = max(tracao, key=lambda x: x[1])[0] if tracao else {"hipotese": "", "nd": 0, "md": 0}
-    gov = escolha["caso_governante"]
 
     # ν e μ no padrão da planilha (referência para comparar com o ábaco)
     nd, md = caso_t["nd"], caso_t["md"]
@@ -682,16 +652,23 @@ def dimensionar_n1_envoltoria(solo, geometria, materiais, fatores, cargas_compre
     except ValueError:
         omega_abaco = None
 
-    as_calculada = escolha["as_calculada_cm2"]
+    as_calculada = arred_cima_excel(as_casos[i_gov], 2)
     omega = as_calculada * fyd / (area_secao_cm2 * sigma_cd)
     rho_percentual = arred_cima_excel(as_calculada / area_secao_cm2 * 100, 3)
     as_minima = arred_excel(armaduras.taxa_minima_longitudinal * area_secao_cm2, 2)
     as_requerida = max(as_calculada, as_minima)
 
+    escolha, alternativas = selecionar_bitola_longitudinal(
+        as_requerida, geometria, materiais, armaduras, bitola_estribo_mm
+    )
     bitola_longitudinal_mm = escolha["bitola_mm"]
     n_barras = escolha["n_barras"]
     as_adotada = escolha["as_adotada_cm2"]
-    verif = escolha["verificacao"]
+    espacamento = escolha["espacamento_cm"]
+
+    raio = _raio_barras_cm(geometria, materiais, bitola_longitudinal_mm, bitola_estribo_mm)
+    mrd, env_adotada = _mrd_barras(env_args, n_barras, raio, escolha["area_barra_cm2"], gov["Nd"])
+    utilizacao = math.inf if mrd <= 0 else abs(gov["md"]) / mrd
 
     phi_cm = bitola_longitudinal_mm / 10
     lb = max(phi_cm / 4 * (materiais.fyd_mpa / materiais.fbd_mpa), phi_cm * 25)
@@ -703,13 +680,16 @@ def dimensionar_n1_envoltoria(solo, geometria, materiais, fatores, cargas_compre
     )
     transpasse = _arredondar_transpasse(transpasse_calculado, fator_momento)
 
-    print(f"Solo {solo.nome} | N1 pela envoltória N×M (NBR 6118) | Ø {bitola_longitudinal_mm:g} mm, barras no raio {escolha['raio_barras_cm']:.1f} cm")
-    for c, a in zip(casos, escolha["as_casos_cm2"]):
-        print(f"   {c['tipo']:<11} {c['hipotese']:<12} Nd = {c['nd']:>9.0f} kgf  Md = {c['md']:>9.0f} kgf·m  ->  As = {a:6.2f} cm²")
+    print(f"Solo {solo.nome} | N1 pela envoltória N×M (NBR 6118) | barras de referência Ø {bitola_ref_mm:g} mm no raio {raio_ref:.1f} cm")
+    for c, a in zip(casos, as_casos):
+        extra = ""
+        if c["tipo"] == "compressão":
+            extra = f"  [M1d = {abs(c['md1']):.0f}, M1d,mín = {c['m1d_min']:.0f}, λ = {c['lambda']:.1f} (λ1 = {c['lambda_lim']:.1f})" + (f", M2d = {c['m2d']:.0f}]" if c["m2d"] else ", sem 2ª ordem]")
+        print(f"   {c['tipo']:<11} {c['hipotese']:<12} Nd = {c['nd']:>9.0f} kgf  Md = {abs(c['md']):>9.0f} kgf·m  ->  As = {a:6.2f} cm²{extra}")
     print(f"   Governa: {gov['tipo']} {gov['hipotese']} | As,calc = {as_calculada:.2f} cm² (ω = {omega:.3f}"
           + (f"; ábaco ω = {omega_abaco:.3f}" if omega_abaco is not None else "; fora do ábaco") + f") | As,mín = {as_minima:.2f} cm²")
-    print(f"   Adotado: {n_barras} Ø {bitola_longitudinal_mm:g} mm = {as_adotada:.2f} cm² | pior hipótese {verif['caso']['hipotese']}: "
-          f"Md = {abs(verif['caso']['md']):.0f} kgf·m ≤ MRd = {verif['MRd_kgfm']:.0f} kgf·m (utilização {verif['utilizacao']:.2f})")
+    print(f"   Adotado: {n_barras} Ø {bitola_longitudinal_mm:g} mm = {as_adotada:.2f} cm² | "
+          f"Md = {abs(gov['md']):.0f} kgf·m, MRd = {mrd:.0f} kgf·m (utilização {utilizacao:.2f})")
 
     return {
         "hipotese_compressao_n1": caso_c["hipotese"], "Nd_compressao_kgf": caso_c["nd"], "Md_compressao_kgfm": caso_c["md"],
@@ -718,18 +698,16 @@ def dimensionar_n1_envoltoria(solo, geometria, materiais, fatores, cargas_compre
         "As_calculada_cm2": as_calculada, "As_minima_cm2": as_minima, "As_requerida_cm2": as_requerida,
         "As_adotada_cm2": as_adotada, "bitola_longitudinal_mm": bitola_longitudinal_mm,
         "quantidade_minima_por_area": escolha["n_por_area"], "quantidade_barras": n_barras,
-        "espacamento_longitudinal_cm": escolha["espacamento_cm"], "faixa_espacamento_n1": escolha["faixa"],
+        "espacamento_longitudinal_cm": espacamento, "faixa_espacamento_n1": escolha["faixa"],
         "transpasse_cm": transpasse,
         "metodo_n1": "Envoltória N×M — NBR 6118",
         "caso_governante_n1": f"{gov['tipo']} {gov['hipotese']}",
-        "MRd_n1_kgfm": verif["MRd_kgfm"], "utilizacao_n1": verif["utilizacao"],
-        "hipotese_verificacao_n1": verif["caso"]["hipotese"],
-        "casos_n1": [{"tipo": c["tipo"], "hipotese": c["hipotese"], "Nd_kgf": c["Nd"], "Md_kgfm": c["md"], "As_cm2": a}
-                     for c, a in zip(casos, escolha["as_casos_cm2"])],
-        "envoltoria_n1": envoltoria_pontos(escolha["envoltoria"], n_barras * escolha["area_barra_cm2"]),
-        "alternativas_n1": [{"bitola_mm": a["bitola_mm"], "n_barras": a["n_barras"], "As_calculada_cm2": a["as_calculada_cm2"],
-                             "As_adotada_cm2": a["as_adotada_cm2"], "espacamento_cm": a["espacamento_cm"], "faixa": a["faixa"],
-                             "utilizacao": a["verificacao"]["utilizacao"]} for a in alternativas],
+        "hipotese_verificacao_n1": gov["hipotese"],
+        "MRd_n1_kgfm": mrd, "utilizacao_n1": utilizacao,
+        "casos_n1": [{"tipo": c["tipo"], "hipotese": c["hipotese"], "Nd_kgf": c["Nd"], "Md_kgfm": abs(c["md"]), "M1d_kgfm": abs(c["md1"]),
+                      "M1d_min_kgfm": c["m1d_min"], "M2d_kgfm": c["m2d"], "lambda": c["lambda"], "lambda_lim": c["lambda_lim"], "As_cm2": a}
+                     for c, a in zip(casos, as_casos)],
+        "envoltoria_n1": envoltoria_pontos(env_adotada, n_barras * escolha["area_barra_cm2"]),
     }
 
 
