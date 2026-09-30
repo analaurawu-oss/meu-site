@@ -456,6 +456,27 @@ def barras_quadradas(n, lado_util_cm, diagonal=False):
     return (x + y) / math.sqrt(2) if diagonal else y
 
 
+def caminho_ultimo(t, h, d, ec2, ecu):
+    # Deformação na fibra mais comprimida e curvatura ao longo do contorno
+    # último: t 0→1 polo A (aço a 10 ‰), 1→2 polo B (εcu), 2→3 polo C (εc2).
+    e_topo = np.empty_like(t)
+    curv = np.empty_like(t)
+    a = t <= 1
+    e_topo[a] = -EPS_SU + t[a] * (ecu + EPS_SU)
+    curv[a] = (e_topo[a] + EPS_SU) / d
+    b = (t > 1) & (t <= 2)
+    xa = ecu / (ecu + EPS_SU) * d
+    x = xa + (t[b] - 1) * (h - xa)
+    e_topo[b] = ecu
+    curv[b] = ecu / x
+    c = t > 2
+    e_base = (t[c] - 2) * ec2
+    hc = (1 - ec2 / ecu) * h
+    curv[c] = (ec2 - e_base) / (h - hc)
+    e_topo[c] = ec2 + curv[c] * hc
+    return e_topo, curv
+
+
 class Envoltoria:
     # Pré-calcula, ao longo do contorno último (t de 0 a 3), as parcelas
     # do concreto (Nc, Mc) e as do aço por cm² de armadura (ns, ms).
@@ -467,22 +488,7 @@ class Envoltoria:
         h = ymax_c - ymin_c
         d = ymax_c - float(np.min(y_barras))
         t = np.linspace(0.0, 3.0, n_pontos)
-        # deformação no topo (ymax_c) e curvatura para cada t
-        e_topo = np.empty_like(t)
-        curv = np.empty_like(t)
-        a = t <= 1
-        e_topo[a] = -EPS_SU + t[a] * (ecu + EPS_SU)
-        curv[a] = (e_topo[a] + EPS_SU) / d
-        b = (t > 1) & (t <= 2)
-        xa = ecu / (ecu + EPS_SU) * d
-        x = xa + (t[b] - 1) * (h - xa)
-        e_topo[b] = ecu
-        curv[b] = ecu / x
-        c = t > 2
-        e_base = (t[c] - 2) * ec2
-        hc = (1 - ec2 / ecu) * h
-        curv[c] = (ec2 - e_base) / (h - hc)
-        e_topo[c] = ec2 + curv[c] * hc
+        e_topo, curv = caminho_ultimo(t, h, d, ec2, ecu)
         self.t, self.e_topo, self.curv, self.ymax = t, e_topo, curv, ymax_c
         eps_c = e_topo[:, None] - curv[:, None] * (ymax_c - y_conc[None, :])
         ec = np.clip(eps_c, 0.0, ec2)
@@ -532,6 +538,79 @@ def envoltoria_pontos(env, As, n=60):
     idx = np.unique(np.linspace(0, len(N) - 1, n).astype(int))
     return [[float(N[i]), float(M[i]) / 100] for i in idx]
 
+# ---------------------------------------------------------------------
+# Flexão oblíqua: contorno resistente Mx × My para um Nd fixo.
+# A linha neutra gira em torno da seção; para cada inclinação acha-se, no
+# contorno último, o estado com N = Nd e calculam-se Mx = Σσ·y·A e
+# My = Σσ·x·A (kgf·m). Seção discretizada em fibras (x, y, área).
+# ---------------------------------------------------------------------
+def fibras_circulo(diametro_cm, n=44):
+    r = diametro_cm / 2
+    passo = diametro_cm / n
+    g = -r + passo * (np.arange(n) + 0.5)
+    x, y = np.meshgrid(g, g)
+    dentro = x ** 2 + y ** 2 <= r * r
+    x, y = x[dentro], y[dentro]
+    a = np.full(x.shape, math.pi * r * r / len(x))  # área total exata
+    ang = np.linspace(0, 2 * math.pi, 181)
+    return (x, y, a), (r * np.cos(ang), r * np.sin(ang))
+
+
+def fibras_quadrado(lado_cm, n=40):
+    passo = lado_cm / n
+    g = -lado_cm / 2 + passo * (np.arange(n) + 0.5)
+    x, y = np.meshgrid(g, g)
+    c = lado_cm / 2
+    return (x.ravel(), y.ravel(), np.full(n * n, passo * passo)), (np.array([-c, c, c, -c]), np.array([-c, -c, c, c]))
+
+
+def barras_circulares_xy(n, raio_cm):
+    ang = 2 * math.pi * np.arange(n) / n
+    return raio_cm * np.cos(ang), raio_cm * np.sin(ang)
+
+
+def barras_quadradas_xy(n, lado_util_cm):
+    c = lado_util_cm
+    k = 4 * np.arange(n)
+    lado, t = k // n, (k % n) / n * c
+    x = np.select([lado == 0, lado == 1, lado == 2], [-c / 2 + t, c / 2 + 0 * t, c / 2 - t], -c / 2 + 0 * t)
+    y = np.select([lado == 0, lado == 1, lado == 2], [-c / 2 + 0 * t, -c / 2 + t, c / 2 + 0 * t], c / 2 - t)
+    return x, y
+
+
+def contorno_mxmy(fibras, borda, barras, area_barra_cm2, lista_nd, sigma_cd, fyd, fck_mpa, n_ang=40, n_t=260):
+    # Devolve, para cada Nd (kgf) da lista, os pontos [Mx, My] (kgf·m) do
+    # contorno resistente; None se o Nd estiver fora da capacidade da seção.
+    xc, yc, ac = fibras
+    bx, by = borda
+    xs, ys = barras
+    ec2, ecu, nexp = parametros_concreto(fck_mpa)
+    t = np.linspace(0.0, 3.0, n_t)
+    saida = [[] for _ in lista_nd]
+    for alfa in np.linspace(0, 2 * math.pi, n_ang, endpoint=False):
+        s, c = math.sin(alfa), math.cos(alfa)
+        v_c, v_b, v_s = xc * s + yc * c, bx * s + by * c, xs * s + ys * c
+        vmax = float(v_b.max())
+        h = vmax - float(v_b.min())
+        d = vmax - float(v_s.min())
+        e_topo, curv = caminho_ultimo(t, h, d, ec2, ecu)
+        eps_c = e_topo[:, None] - curv[:, None] * (vmax - v_c[None, :])
+        ec = np.clip(eps_c, 0.0, ec2)
+        sig_c = np.where(eps_c > 0, sigma_cd * (1 - (1 - ec / ec2) ** nexp), 0.0) * ac[None, :]
+        sig_s = np.clip(ES_KGF_CM2 * (e_topo[:, None] - curv[:, None] * (vmax - v_s[None, :])), -fyd, fyd) * area_barra_cm2
+        N = sig_c.sum(axis=1) + sig_s.sum(axis=1)
+        Mx = (sig_c @ yc + sig_s @ ys) / 100
+        My = (sig_c @ xc + sig_s @ xs) / 100
+        for k, nd in enumerate(lista_nd):
+            if saida[k] is None or not (N[0] <= nd <= N[-1]):
+                saida[k] = None
+                continue
+            i = min(max(int(np.searchsorted(N, nd)), 1), len(N) - 1)
+            f = 0.0 if N[i] == N[i - 1] else (nd - N[i - 1]) / (N[i] - N[i - 1])
+            saida[k].append([float(Mx[i - 1] + f * (Mx[i] - Mx[i - 1])), float(My[i - 1] + f * (My[i] - My[i - 1]))])
+    return saida
+
+
 
 def alfa_c(fck_mpa):
     # NBR 6118:2023, 17.2.2 — fator do bloco de tensões (0,85 até C50).
@@ -551,6 +630,7 @@ def _casos_n1(solo, geometria, materiais, fatores, cargas_compressao, cargas_tra
             nd = arred_excel(carga.vertical_kgf * materiais.coef_estrutural, 0)
             md = momento_no_fuste(carga, solo, geometria, materiais, fatores["Kp"], excentricidade_vertical_mm, excentricidade_horizontal_mm)
             c = {"tipo": tipo, "hipotese": carga.hipotese, "nd": nd, "Nd": sinal * nd, "md": md, "md1": md,
+                 "ht": abs(carga.transversal_kgf), "hl": abs(carga.longitudinal_kgf),
                  "m1d_min": 0.0, "lambda": 0.0, "lambda_lim": 0.0, "m2d": 0.0}
             if tipo == "compressão" and nd > 0:
                 m1 = max(abs(md), nd * (0.015 + 0.03 * d_m))
@@ -586,6 +666,38 @@ def _mrd_barras(env_args, n_barras, raio_cm, area_barra_cm2, Nd):
             for g in (0.0, math.pi / n_barras)]
     env = min(envs, key=lambda e: e.momento_resistente(Nd, As))
     return env.momento_resistente(Nd, As) / 100, env
+
+
+def _componentes_mxmy(md, ht, hl):
+    # Divide o momento resultante nas direções transversal (Mx) e longitudinal (My).
+    h = math.hypot(ht, hl)
+    return (abs(md), 0.0) if h == 0 else (abs(md) * ht / h, abs(md) * hl / h)
+
+
+def _mxmy_tubulao(casos, as_casos, geometria, n_barras, raio, area_barra_cm2, sigma_cd, fyd, fck_mpa):
+    # Plano Mx × My: contornos resistentes das barras adotadas no Nd da hipótese
+    # crítica de compressão e de tração, elipse de M1d,mín e pontos solicitantes.
+    d_m = geometria.diametro_m
+    grupos = {}
+    for c, a in zip(casos, as_casos):
+        if c["tipo"] not in grupos or a > grupos[c["tipo"]][1]:
+            grupos[c["tipo"]] = (c, a)
+    tipos = list(grupos)
+    fib, borda = fibras_circulo(d_m * 100)
+    contornos = contorno_mxmy(fib, borda, barras_circulares_xy(n_barras, raio), area_barra_cm2,
+                              [grupos[t][0]["Nd"] for t in tipos], sigma_cd, fyd, fck_mpa)
+    saida = {"casos": [], "contornos": []}
+    for t, pts in zip(tipos, contornos):
+        c = grupos[t][0]
+        item = {"tipo": t, "hipotese": c["hipotese"], "Nd_kgf": c["Nd"], "pontos": pts}
+        if t == "compressão":
+            m = c["nd"] * (0.015 + 0.03 * d_m)
+            item["m1d_min_xx"], item["m1d_min_yy"] = m, m
+        saida["contornos"].append(item)
+    for c in casos:
+        mx, my = _componentes_mxmy(c["md"], c["ht"], c["hl"])
+        saida["casos"].append({"tipo": c["tipo"], "hipotese": c["hipotese"], "Nd_kgf": c["Nd"], "Mx_kgfm": mx, "My_kgfm": my})
+    return saida
 
 
 def dimensionar_n1_envoltoria(solo, geometria, materiais, fatores, cargas_compressao, cargas_tracao, armaduras, bitola_estribo_mm, excentricidade_vertical_mm, excentricidade_horizontal_mm):
@@ -667,7 +779,10 @@ def dimensionar_n1_envoltoria(solo, geometria, materiais, fatores, cargas_compre
     print(f"   Adotado: {n_barras} Ø {bitola_longitudinal_mm:g} mm = {as_adotada:.2f} cm² | "
           f"Md = {abs(gov['md']):.0f} kgf·m, MRd = {mrd:.0f} kgf·m (utilização {utilizacao:.2f})")
 
+    mxmy = _mxmy_tubulao(casos, as_casos, geometria, n_barras, raio, escolha["area_barra_cm2"], sigma_cd, fyd, materiais.fck_mpa)
+
     return {
+        "mxmy_n1": mxmy,
         "hipotese_compressao_n1": caso_c["hipotese"], "Nd_compressao_kgf": caso_c["nd"], "Md_compressao_kgfm": caso_c["md"],
         "hipotese_tracao_n1": caso_t["hipotese"], "Nd_tracao_kgf": nd, "Md_tracao_kgfm": md,
         "nu": nu, "mu": mu, "omega": omega, "omega_abaco": omega_abaco, "rho_percentual": rho_percentual,
