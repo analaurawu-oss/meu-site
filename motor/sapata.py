@@ -671,7 +671,15 @@ def dimensionar_fuste(s,stub,phi_estribo_mm=6.3):
                 omega=omega_abaco;ascalc=omega*fcd/fyd*(a*100)**2
             ht,hl=abs(ca['transversal_kgf']),abs(ca['longitudinal_kgf']);hr=math.hypot(ht,hl)
             mx,my=(md_adot,0.0) if hr==0 else (md_adot*ht/hr,md_adot*hl/hr)
+            # seção intermediária do fuste (meia altura, em balanço a partir da base)
+            m_meio=hd*ell/2+a*a*(ell/2)*MATERIAIS['gamma_concreto']*math.tan(stub['beta_rad'])*(ell/2)/2
+            # envoltória mínima com 2ª ordem (NBR 6118, 15.3.2): αb = 1,0 e λ1 com e1,mín
+            m1min=nd*(.015+.03*a);m2min=0.0
+            if tipo=='compressao':
+                lim_min=min(90,max(35,25+12.5*(.015+.03*a)/a))
+                if lam>lim_min:m2min=nd*(2*ell)**2/10*min(.005/(a*(nu+.5)),.005/a)
             linhas.append(dict(tipo=tipo,hipotese=ca['hipotese'],Nd_kgf=nd,Md1_kgfm=md,Md_adot_kgfm=md_adot,Mx_kgfm=mx,My_kgfm=my,
+                               M_meio_kgfm=m_meio,M1d_min_kgfm=m1min,M1d_min_2a_kgfm=m1min+m2min,
                                lambda_=lam,lambda_lim=lim,nu=nu,mu=mu,omega=omega,omega_abaco=omega_abaco,As_calc_cm2=ascalc))
             cel['BCDE'[i]+str(259 if tipo=='tracao' else 275)]=md
             cel['BCDE'[i]+str(267 if tipo=='tracao' else 283)]=ascalc
@@ -714,8 +722,14 @@ def dimensionar_fuste(s,stub,phi_estribo_mm=6.3):
         nome_t={'compressao':'compressão','tracao':'tração'}
         cont=[]
         for t,p in zip(tipos,pts):
-            g=grupos[t];item=dict(tipo=nome_t[t],hipotese=g['hipotese'],Nd_kgf=(1 if t=='compressao' else -1)*g['Nd_kgf'],pontos=p)
-            if t=='compressao':item['m1d_min_xx']=item['m1d_min_yy']=g['Nd_kgf']*(.015+.03*a)
+            g=grupos[t];item=dict(tipo=nome_t[t],hipotese=g['hipotese'],Nd_kgf=(1 if t=='compressao' else -1)*g['Nd_kgf'],pontos=p,secoes=[])
+            hyp=next(c for c in (CARGAS_TRACAO if t=='tracao' else CARGAS_COMPRESSAO) if c['hipotese']==g['hipotese'])
+            ht,hl=abs(hyp['transversal_kgf']),abs(hyp['longitudinal_kgf']);hr=math.hypot(ht,hl)
+            for sec,m in (('topo',0.0),('intermediária',g['M_meio_kgfm']),('base',g['Md_adot_kgfm'])):
+                item['secoes'].append(dict(secao=sec,M_kgfm=m,Mx_kgfm=m if hr==0 else m*ht/hr,My_kgfm=0.0 if hr==0 else m*hl/hr))
+            if t=='compressao':
+                item['m1d_min_xx']=item['m1d_min_yy']=g['M1d_min_kgfm']
+                item['m1d_min_2a_xx']=item['m1d_min_2a_yy']=g['M1d_min_2a_kgfm']
             cont.append(item)
         arm['mxmy']=dict(contornos=cont,casos=[dict(tipo=nome_t[l['tipo']],hipotese=l['hipotese'],
             Nd_kgf=(1 if l['tipo']=='compressao' else -1)*l['Nd_kgf'],Mx_kgfm=l['Mx_kgfm'],My_kgfm=l['My_kgfm']) for l in linhas])

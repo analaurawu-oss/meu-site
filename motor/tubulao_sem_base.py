@@ -631,7 +631,9 @@ def _casos_n1(solo, geometria, materiais, fatores, cargas_compressao, cargas_tra
             md = momento_no_fuste(carga, solo, geometria, materiais, fatores["Kp"], excentricidade_vertical_mm, excentricidade_horizontal_mm)
             c = {"tipo": tipo, "hipotese": carga.hipotese, "nd": nd, "Nd": sinal * nd, "md": md, "md1": md,
                  "ht": abs(carga.transversal_kgf), "hl": abs(carga.longitudinal_kgf),
-                 "m1d_min": 0.0, "lambda": 0.0, "lambda_lim": 0.0, "m2d": 0.0}
+                 "m1d_min": 0.0, "lambda": 0.0, "lambda_lim": 0.0, "m2d": 0.0, "m1d_min_2a": 0.0,
+                 # momento no topo do fuste (sem o braço da carga horizontal)
+                 "m_topo": materiais.coef_estrutural * (carga.horizontal_kgf * excentricidade_horizontal_mm - carga.vertical_kgf * excentricidade_vertical_mm) / 1000}
             if tipo == "compressão" and nd > 0:
                 m1 = max(abs(md), nd * (0.015 + 0.03 * d_m))
                 h = carga.horizontal_kgf
@@ -643,12 +645,18 @@ def _casos_n1(solo, geometria, materiais, fatores, cargas_compressao, cargas_tra
                     raise ValueError(f"Hipótese {carga.hipotese}: esbeltez do fuste λ = {lam:.1f} > 90 — método de 2ª ordem não habilitado.")
                 m2 = 0.0
                 md_tot = m1
+                nu_nbr = nd / (area_cm2 * materiais.fcd_mpa * 10)
+                curvatura = min(0.005 / (d_m * (nu_nbr + 0.5)), 0.005 / d_m)
+                m2_curv = nd * le ** 2 / 10 * curvatura
                 if lam > lam_lim:
-                    nu_nbr = nd / (area_cm2 * materiais.fcd_mpa * 10)
-                    curvatura = min(0.005 / (d_m * (nu_nbr + 0.5)), 0.005 / d_m)
-                    m2 = nd * le ** 2 / 10 * curvatura
+                    m2 = m2_curv
                     md_tot = max(m1, 0.9 * m1 + m2)
-                c.update(md=md_tot, m1d_min=nd * (0.015 + 0.03 * d_m), **{"lambda": lam, "lambda_lim": lam_lim, "m2d": m2})
+                # Envoltória mínima com 2ª ordem (15.3.2): M1d,mín + M2d, com αb = 1,0
+                # e λ1 calculado com a excentricidade mínima de 1ª ordem.
+                m1d_min = nd * (0.015 + 0.03 * d_m)
+                lam_lim_min = min(90.0, max(35.0, 25 + 12.5 * (0.015 + 0.03 * d_m) / d_m))
+                c.update(md=md_tot, m1d_min=m1d_min, m1d_min_2a=m1d_min + (m2_curv if lam > lam_lim_min else 0.0),
+                         **{"lambda": lam, "lambda_lim": lam_lim, "m2d": m2, "lambda_lim_min": lam_lim_min})
             casos.append(c)
     return casos
 
@@ -689,10 +697,16 @@ def _mxmy_tubulao(casos, as_casos, geometria, n_barras, raio, area_barra_cm2, si
     saida = {"casos": [], "contornos": []}
     for t, pts in zip(tipos, contornos):
         c = grupos[t][0]
-        item = {"tipo": t, "hipotese": c["hipotese"], "Nd_kgf": c["Nd"], "pontos": pts}
+        item = {"tipo": t, "hipotese": c["hipotese"], "Nd_kgf": c["Nd"], "pontos": pts, "secoes": []}
+        # Seções do fuste: topo, intermediária (média linear) e base = seção crítica
+        # (profundidade do momento máximo), esta já com a 2ª ordem quando houver.
+        m_topo, m_base1 = abs(c["m_topo"]), abs(c["md1"])
+        for nome, m in (("topo", m_topo), ("intermediária", (m_topo + m_base1) / 2), ("base", abs(c["md"]))):
+            mx, my = _componentes_mxmy(m, c["ht"], c["hl"])
+            item["secoes"].append({"secao": nome, "M_kgfm": m, "Mx_kgfm": mx, "My_kgfm": my})
         if t == "compressão":
-            m = c["nd"] * (0.015 + 0.03 * d_m)
-            item["m1d_min_xx"], item["m1d_min_yy"] = m, m
+            item["m1d_min_xx"] = item["m1d_min_yy"] = c["m1d_min"]
+            item["m1d_min_2a_xx"] = item["m1d_min_2a_yy"] = c["m1d_min_2a"]
         saida["contornos"].append(item)
     for c in casos:
         mx, my = _componentes_mxmy(c["md"], c["ht"], c["hl"])
