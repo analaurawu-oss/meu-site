@@ -477,6 +477,8 @@ def envoltoria_pontos(env, As, n=60):
 
 # Método do N1 do fuste: "envoltoria" (compatibilidade de deformações) ou "abaco" (planilha).
 METODO_N1 = "envoltoria"
+# Momentos no plano Mx × My: "eixo" (resultante em Mx, como no P-Calc) ou "componentes".
+LANCAMENTO_MXMY = "eixo"
 
 def ks_por_kc(kc):
     t=TABELAS['kc_ks'];fck=MATERIAIS['fck_kgf_cm2']
@@ -670,7 +672,9 @@ def dimensionar_fuste(s,stub,phi_estribo_mm=6.3):
             else:
                 omega=omega_abaco;ascalc=omega*fcd/fyd*(a*100)**2
             ht,hl=abs(ca['transversal_kgf']),abs(ca['longitudinal_kgf']);hr=math.hypot(ht,hl)
-            mx,my=(md_adot,0.0) if hr==0 else (md_adot*ht/hr,md_adot*hl/hr)
+            # momento no eixo principal Mx (direção mais desfavorável do quadrado), ou decomposto
+            sx=1 if tipo=='compressao' else -1  # compressão em +Mx, tração em −Mx
+            mx,my=(sx*md_adot,0.0) if (hr==0 or LANCAMENTO_MXMY=='eixo') else (md_adot*ht/hr,md_adot*hl/hr)
             # seção intermediária do fuste (meia altura, em balanço a partir da base)
             m_meio=hd*ell/2+a*a*(ell/2)*MATERIAIS['gamma_concreto']*math.tan(stub['beta_rad'])*(ell/2)/2
             # envoltória mínima com 2ª ordem (NBR 6118, 15.3.2): αb = 1,0 e λ1 com e1,mín
@@ -726,7 +730,9 @@ def dimensionar_fuste(s,stub,phi_estribo_mm=6.3):
             hyp=next(c for c in (CARGAS_TRACAO if t=='tracao' else CARGAS_COMPRESSAO) if c['hipotese']==g['hipotese'])
             ht,hl=abs(hyp['transversal_kgf']),abs(hyp['longitudinal_kgf']);hr=math.hypot(ht,hl)
             for sec,m in (('topo',0.0),('intermediária',g['M_meio_kgfm']),('base',g['Md_adot_kgfm'])):
-                item['secoes'].append(dict(secao=sec,M_kgfm=m,Mx_kgfm=m if hr==0 else m*ht/hr,My_kgfm=0.0 if hr==0 else m*hl/hr))
+                ex=hr==0 or LANCAMENTO_MXMY=='eixo'
+                sx=1 if t=='compressao' else -1
+                item['secoes'].append(dict(secao=sec,M_kgfm=m,Mx_kgfm=sx*m if ex else m*ht/hr,My_kgfm=0.0 if ex else m*hl/hr))
             if t=='compressao':
                 item['m1d_min_xx']=item['m1d_min_yy']=g['M1d_min_kgfm']
                 item['m1d_min_2a_xx']=item['m1d_min_2a_yy']=g['M1d_min_2a_kgfm']
@@ -836,6 +842,8 @@ def rodar(entrada_json):
     global NOME_TORRE, COEF_GEO, COEF_ESTR, MATERIAIS, CARGAS_COMPRESSAO, CARGAS_TRACAO, STUB_DADOS, METODO_N1
     e = json.loads(entrada_json)
     METODO_N1 = e.get("metodo_n1", "envoltoria")
+    global LANCAMENTO_MXMY
+    LANCAMENTO_MXMY = e.get("lancamento_mxmy", "eixo")
     NOME_TORRE = e["nome_torre"]
     COEF_GEO = float(e["coef_geo"]); COEF_ESTR = float(e["coef_estr"])
     MATERIAIS = e["materiais"]

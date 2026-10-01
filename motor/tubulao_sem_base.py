@@ -676,8 +676,17 @@ def _mrd_barras(env_args, n_barras, raio_cm, area_barra_cm2, Nd):
     return env.momento_resistente(Nd, As) / 100, env
 
 
-def _componentes_mxmy(md, ht, hl):
-    # Divide o momento resultante nas direções transversal (Mx) e longitudinal (My).
+# Lançamento dos momentos no plano Mx × My:
+#   "eixo"       → momento resultante no eixo Mx (My = 0), como no P-Calc;
+#   "componentes" → decomposto pelas cargas transversal (Mx) e longitudinal (My).
+# Na seção circular a direção não altera o MRd; só muda a posição do ponto.
+LANCAMENTO_MXMY = "eixo"
+
+
+def _componentes_mxmy(md, ht, hl, tipo="compressão"):
+    if LANCAMENTO_MXMY == "eixo":
+        # compressão em +Mx e tração em −Mx, para os pontos não se sobreporem
+        return (abs(md) if tipo == "compressão" else -abs(md)), 0.0
     h = math.hypot(ht, hl)
     return (abs(md), 0.0) if h == 0 else (abs(md) * ht / h, abs(md) * hl / h)
 
@@ -702,14 +711,14 @@ def _mxmy_tubulao(casos, as_casos, geometria, n_barras, raio, area_barra_cm2, si
         # (profundidade do momento máximo), esta já com a 2ª ordem quando houver.
         # diagrama linear de 1ª ordem entre topo (−V·e_v + H·e_h) e base: média com sinal
         for nome, m in (("topo", abs(c["m_topo"])), ("intermediária", abs(c["m_topo"] + c["md1"]) / 2), ("base", abs(c["md"]))):
-            mx, my = _componentes_mxmy(m, c["ht"], c["hl"])
+            mx, my = _componentes_mxmy(m, c["ht"], c["hl"], t)
             item["secoes"].append({"secao": nome, "M_kgfm": m, "Mx_kgfm": mx, "My_kgfm": my})
         if t == "compressão":
             item["m1d_min_xx"] = item["m1d_min_yy"] = c["m1d_min"]
             item["m1d_min_2a_xx"] = item["m1d_min_2a_yy"] = c["m1d_min_2a"]
         saida["contornos"].append(item)
     for c in casos:
-        mx, my = _componentes_mxmy(c["md"], c["ht"], c["hl"])
+        mx, my = _componentes_mxmy(c["md"], c["ht"], c["hl"], c["tipo"])
         saida["casos"].append({"tipo": c["tipo"], "hipotese": c["hipotese"], "Nd_kgf": c["Nd"], "Mx_kgfm": mx, "My_kgfm": my})
     return saida
 
@@ -981,6 +990,8 @@ def rodar(entrada_json):
     global MATERIAIS, SOLOS, GEOMETRIAS, CARGAS_COMPRESSAO, CARGAS_TRACAO, ARMADURAS, METODO_N1
     e = json.loads(entrada_json)
     METODO_N1 = e.get("metodo_n1", "envoltoria")
+    global LANCAMENTO_MXMY
+    LANCAMENTO_MXMY = e.get("lancamento_mxmy", "eixo")
     NOME_TORRE = e["nome_torre"]
     TIPO_DE_FUNDACAO = e.get("tipo_fundacao", "T")
     STUB_CALCULADO = calcular_stub(e["stub"])
