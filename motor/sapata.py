@@ -699,6 +699,10 @@ def dimensionar_fuste(s,stub,phi_estribo_mm=6.3):
             u=math.inf if mrd<=0 else c['Md']/mrd
             if pior is None or u>pior['utilizacao']:pior=dict(caso=c,MRd_kgfm=mrd,utilizacao=u)
         verif=pior
+        # MRd e Md/MRd de cada hipótese com as barras adotadas (tabela do relatório)
+        mrds=[min(e.momento_resistente(c['Nd'],As) for e in ev)/100 for c in casos]
+        tb['MRd_kgfm']=mrds
+        tb['utilizacao']=[c['Md']/m if m>0 else math.inf for c,m in zip(casos,mrds)]
         gov=tb.loc[tb.As_calc_cm2.idxmax()]
         print(f"Fuste {s.get('nome', '')} | N1 pela envoltória N×M (NBR 6118), eixo principal e diagonal | Ø {phi:g} mm")
         for l in linhas:

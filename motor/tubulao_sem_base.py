@@ -285,7 +285,8 @@ def selecionar_bitola_longitudinal(as_requerida_cm2, geometria, materiais, armad
         n_para_faixa_ideal = math.ceil(
             perimetro_util_cm / armaduras.espacamento_longitudinal_ideal_max_cm
         )
-        n_barras = max(n_por_area, n_para_faixa_ideal)
+        # NBR 6118, 18.4.2.2: no mínimo 6 barras em seção circular.
+        n_barras = max(n_por_area, n_para_faixa_ideal, 6)
         espacamento_cm = arred_excel(perimetro_util_cm / n_barras, 1)
         as_adotada_cm2 = arred_excel(area_barra_cm2 * n_barras, 2)
 
@@ -665,15 +666,44 @@ def _raio_barras_cm(geometria, materiais, bitola_mm, bitola_estribo_mm):
     return geometria.diametro_m * 100 / 2 - materiais.cobrimento_cm - bitola_estribo_mm / 10 - bitola_mm / 20
 
 
-def _mrd_barras(env_args, n_barras, raio_cm, area_barra_cm2, Nd):
-    # MRd (kgf·m) das barras reais, na pior posição do arranjo (barra no
-    # eixo de flexão ou entre barras). Só para informar a utilização.
+def _verificar_barras(env_args, casos, n_barras, raio_cm, area_barra_cm2):
+    # MRd (kgf·m) e Md/MRd de todas as hipóteses com as barras reais, na pior
+    # posição do arranjo (barra no eixo de flexão ou entre duas barras).
     y_conc, a_conc, sigma_cd, fyd, fck_mpa = env_args
     As = n_barras * area_barra_cm2
     envs = [Envoltoria(y_conc, a_conc, barras_circulares(n_barras, raio_cm, g), sigma_cd, fyd, fck_mpa)
             for g in (0.0, math.pi / n_barras)]
-    env = min(envs, key=lambda e: e.momento_resistente(Nd, As))
-    return env.momento_resistente(Nd, As) / 100, env
+    linhas = []
+    for c in casos:
+        mrd = min(e.momento_resistente(c["Nd"], As) for e in envs) / 100
+        linhas.append({"MRd_kgfm": mrd, "utilizacao": math.inf if mrd <= 0 else abs(c["md"]) / mrd})
+    i_pior = max(range(len(casos)), key=lambda i: linhas[i]["utilizacao"])
+    env_pior = min(envs, key=lambda e: e.momento_resistente(casos[i_pior]["Nd"], As))
+    return linhas, i_pior, env_pior, envs
+
+
+def _alternativas_n1(env_args, casos, contornos, geometria, materiais, armaduras, bitola_estribo_mm, as_requerida, escolhida):
+    # Para a troca de bitola na interface: com cada bitola disponível, o número de
+    # barras sai da mesma As requerida (mín. 6) e as barras são verificadas de novo.
+    saida = {}
+    for b in sorted(armaduras.bitolas_longitudinais_disponiveis_mm):
+        ab = math.pi * (b / 10) ** 2 / 4
+        n = escolhida["n_barras"] if b == escolhida["bitola_mm"] else max(math.ceil(as_requerida / ab - 1e-9), 6)
+        raio = _raio_barras_cm(geometria, materiais, b, bitola_estribo_mm)
+        linhas, ip, env, envs = _verificar_barras(env_args, casos, n, raio, ab)
+        As = n * ab
+        ang = np.linspace(0, 2 * math.pi, 41)
+        circ = []
+        for c in contornos:
+            # seção circular: o contorno Mx × My é um círculo de raio MRd(Nd)
+            r = min(e.momento_resistente(c["Nd_kgf"], As) for e in envs) / 100
+            circ.append([[float(r * math.cos(t)), float(r * math.sin(t))] for t in ang[:-1]] if r > 0 else None)
+        saida[f"{b:g}"] = {
+            "n_barras": n, "MRd_n1_kgfm": linhas[ip]["MRd_kgfm"], "utilizacao_n1": linhas[ip]["utilizacao"],
+            "hipotese_verificacao_n1": f"{casos[ip]['tipo']} {casos[ip]['hipotese']}",
+            "casos": linhas, "envoltoria_n1": envoltoria_pontos(env, As), "contornos": circ,
+        }
+    return saida
 
 
 # Lançamento dos momentos no plano Mx × My:
@@ -778,8 +808,9 @@ def dimensionar_n1_envoltoria(solo, geometria, materiais, fatores, cargas_compre
     espacamento = escolha["espacamento_cm"]
 
     raio = _raio_barras_cm(geometria, materiais, bitola_longitudinal_mm, bitola_estribo_mm)
-    mrd, env_adotada = _mrd_barras(env_args, n_barras, raio, escolha["area_barra_cm2"], gov["Nd"])
-    utilizacao = math.inf if mrd <= 0 else abs(gov["md"]) / mrd
+    verif, i_pior, env_adotada, _ = _verificar_barras(env_args, casos, n_barras, raio, escolha["area_barra_cm2"])
+    pior = casos[i_pior]
+    mrd, utilizacao = verif[i_pior]["MRd_kgfm"], verif[i_pior]["utilizacao"]
 
     phi_cm = bitola_longitudinal_mm / 10
     lb = max(phi_cm / 4 * (materiais.fyd_mpa / materiais.fbd_mpa), phi_cm * 25)
@@ -799,10 +830,12 @@ def dimensionar_n1_envoltoria(solo, geometria, materiais, fatores, cargas_compre
         print(f"   {c['tipo']:<11} {c['hipotese']:<12} Nd = {c['nd']:>9.0f} kgf  Md = {abs(c['md']):>9.0f} kgf·m  ->  As = {a:6.2f} cm²{extra}")
     print(f"   Governa: {gov['tipo']} {gov['hipotese']} | As,calc = {as_calculada:.2f} cm² (ω = {omega:.3f}"
           + (f"; ábaco ω = {omega_abaco:.3f}" if omega_abaco is not None else "; fora do ábaco") + f") | As,mín = {as_minima:.2f} cm²")
-    print(f"   Adotado: {n_barras} Ø {bitola_longitudinal_mm:g} mm = {as_adotada:.2f} cm² | "
-          f"Md = {abs(gov['md']):.0f} kgf·m, MRd = {mrd:.0f} kgf·m (utilização {utilizacao:.2f})")
+    print(f"   Adotado: {n_barras} Ø {bitola_longitudinal_mm:g} mm = {as_adotada:.2f} cm² | mais solicitada: {pior['tipo']} {pior['hipotese']} — "
+          f"Md = {abs(pior['md']):.0f} kgf·m, MRd = {mrd:.0f} kgf·m (Md/MRd = {utilizacao:.2f})")
 
     mxmy = _mxmy_tubulao(casos, as_casos, geometria, n_barras, raio, escolha["area_barra_cm2"], sigma_cd, fyd, materiais.fck_mpa)
+    alternativas_n1 = _alternativas_n1(env_args, casos, mxmy["contornos"], geometria, materiais, armaduras,
+                                       bitola_estribo_mm, as_requerida, escolha)
 
     return {
         "mxmy_n1": mxmy,
@@ -816,11 +849,13 @@ def dimensionar_n1_envoltoria(solo, geometria, materiais, fatores, cargas_compre
         "transpasse_cm": transpasse,
         "metodo_n1": "Envoltória N×M — NBR 6118",
         "caso_governante_n1": f"{gov['tipo']} {gov['hipotese']}",
-        "hipotese_verificacao_n1": gov["hipotese"],
+        "hipotese_verificacao_n1": f"{pior['tipo']} {pior['hipotese']}",
+        "alternativas_n1": alternativas_n1,
         "MRd_n1_kgfm": mrd, "utilizacao_n1": utilizacao,
         "casos_n1": [{"tipo": c["tipo"], "hipotese": c["hipotese"], "Nd_kgf": c["Nd"], "Md_kgfm": abs(c["md"]), "M1d_kgfm": abs(c["md1"]),
-                      "M1d_min_kgfm": c["m1d_min"], "M2d_kgfm": c["m2d"], "lambda": c["lambda"], "lambda_lim": c["lambda_lim"], "As_cm2": a}
-                     for c, a in zip(casos, as_casos)],
+                      "M1d_min_kgfm": c["m1d_min"], "M2d_kgfm": c["m2d"], "lambda": c["lambda"], "lambda_lim": c["lambda_lim"], "As_cm2": a,
+                      "MRd_kgfm": v["MRd_kgfm"], "utilizacao": v["utilizacao"]}
+                     for c, a, v in zip(casos, as_casos, verif)],
         "envoltoria_n1": envoltoria_pontos(env_adotada, n_barras * escolha["area_barra_cm2"]),
     }
 

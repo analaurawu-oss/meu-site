@@ -1,4 +1,4 @@
-"""Copia os motores de motor/*.py para dentro do index.html.
+"""Copia os motores de motor/*.py e o relatório modelo/relatorio.js para dentro do index.html.
 
 O site busca primeiro motor/<arquivo>.py (quando está publicado ou servido
 por um servidor local); se não conseguir (por exemplo, index.html aberto
@@ -34,6 +34,12 @@ def main():
         js = f"// Gerado a partir de {arq} — não editar à mão\nwindow.{glob} = {json.dumps(codigo, ensure_ascii=False)};\n"
         manifesto[chave]["data"] = base64.b64encode(gzip.compress(js.encode("utf-8"), mtime=0)).decode()
         print(f"{arq} -> {chave}")
+    # relatório (memória de cálculo): o arquivo inteiro é o script
+    chave = next(k for k, v in manifesto.items() if v["mime"].endswith("javascript")
+                 and gzip.decompress(base64.b64decode(v["data"])).startswith("// Memória de cálculo".encode()))
+    with open(os.path.join(RAIZ, "modelo", "relatorio.js"), encoding="utf-8") as f:
+        manifesto[chave]["data"] = base64.b64encode(gzip.compress(f.read().encode("utf-8"), mtime=0)).decode()
+    print(f"relatorio.js -> {chave}")
     linhas[i] = json.dumps(manifesto)
     with open(caminho, "w", encoding="utf-8") as f:
         f.write("\n".join(linhas))
