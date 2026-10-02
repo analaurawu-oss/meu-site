@@ -37,7 +37,7 @@
     document.querySelectorAll('[data-tocref]').forEach(e => { const h = document.getElementById(e.getAttribute('data-tocref')); const pg = h && h.closest('.page'); e.textContent = pg ? all.indexOf(pg) + 1 : ''; });
   }
 
-  window.RelatorioTubulao = function (run, doc, logos, figs) {
+  window.RelatorioTubulao = function (run, doc, logos, figs, modo) {
     doc = doc || {}; logos = logos || {}; figs = figs || {};
     const INCLUIR_CAPA = false;   // capa desativada por enquanto
     const ent = run.entrada, res = run.res, M = ent.materiais, torre = run.torreNome, tipo = ent.tipo_fundacao;
@@ -82,7 +82,7 @@
         '<line x1="110" y1="285" x2="150" y2="285" stroke="#000" stroke-width=".7"/><text x="130" y="298" text-anchor="middle">D</text>' +
         (TB ? '' : '<line x1="175" y1="40" x2="175" y2="275" stroke="#000" stroke-width=".7"/><line x1="170" y1="40" x2="180" y2="40" stroke="#000" stroke-width=".7"/><line x1="170" y1="275" x2="180" y2="275" stroke="#000" stroke-width=".7"/><text x="186" y="160">H = L + G</text>') +
         '<text x="236" y="104" text-anchor="end" fill="#7a5c33">Terreno</text><text x="152" y="12">Stub</text></svg>';
-      figN++; return '<div class="fig">' + s + '<p class="leg">Figura ' + h1 + '.' + figN + ' – Geometria esquemática do ' + nomeFl + '</p></div>';
+      figN++; return '<div class="fig"><p class="leg">Figura ' + h1 + '.' + figN + ' – Geometria esquemática do ' + nomeFl + '</p>' + s + '</div>';
     };
 
     // ---------- gráficos (estilo P-Calc) e desenhos do esquema ----------
@@ -148,7 +148,7 @@
     let figClip = 0;
     const legGraf = '<p class="nota">Legenda: <span style="color:' + AZ + '">━</span> resistente no N<sub>d</sub> de compressão; <span style="color:' + COR['tração'] + '">━</span> resistente no N<sub>d</sub> de tração; ' +
       '- - - envoltória mínima de 1ª ordem; ···· envoltória mínima com 2ª ordem; ▲ topo, ● seção intermediária, ◆ base (seção crítica); verde = compressão, laranja = tração.</p>';
-    const FIGS = (cap, itens) => { figN++; return '<div class="fig figrow"><div class="figgrid">' + itens.filter(Boolean).map(x => '<div class="figcel">' + x + '</div>').join('') + '</div><p class="leg">Figura ' + h1 + '.' + figN + ' – ' + cap + '</p></div>'; };
+    const FIGS = (cap, itens) => { figN++; return '<div class="fig figrow"><p class="leg">Figura ' + h1 + '.' + figN + ' – ' + cap + '</p><div class="figgrid">' + itens.filter(Boolean).map(x => '<div class="figcel">' + x + '</div>').join('') + '</div></div>'; };
 
     // ---------- conteúdo ----------
     const B = [];
@@ -216,7 +216,8 @@
       solos.forEach(n => { const T = TBL[n], x = R(n), fg = figs[n] || {}; if (!T) return;
         B.push(H3('Solo ' + n + ' – verificação da seção do fuste'));
         B.push(tabH('Fuste – hipóteses de cálculo – solo ' + E(n), (T.fuste || []).map(rw => Object.assign({}, rw, { tipo: rw.tipo === 'tracao' ? 'tração' : rw.tipo === 'compressao' ? 'compressão' : rw.tipo, FS: rw.MRd_kgfm && rw.Md_adot_kgfm ? rw.MRd_kgfm / rw.Md_adot_kgfm : null })),
-          [['tipo', 'Tipo'], ['hipotese', 'Hip.'], ['Nd_kgf', 'N<sub>d</sub>', 0], ['Md_adot_kgfm', 'M<sub>d</sub>', 0], ['lambda_', 'λ', 1], ['omega', 'ω envolt.', 3], ['omega_abaco', 'ω ábaco', 3], ['As_calc_cm2', 'A<sub>s</sub> (cm²)', 2], ['MRd_kgfm', 'M<sub>Rd</sub>', 0], ['FS', 'F.S.', 2]], { cls: 'q' }));
+          [['tipo', 'Tipo'], ['hipotese', 'Hip.'], ['Nd_kgf', 'N<sub>d</sub>', 0], ['Md_adot_kgfm', 'M<sub>d</sub>', 0], ['lambda_', 'λ', 1], ['omega', 'ω envolt.', 3], ['omega_abaco', 'ω ábaco', 3], ['As_calc_cm2', 'A<sub>s</sub> (cm²)', 2], ['MRd_kgfm', 'M<sub>Rd</sub>', 0], ['FS', 'F.S.', 2]],
+          { cls: 'q', cols: ['14%', '7%', '10%', '10%', '7%', '10%', '10%', '10%', '12%', '10%'] }));
         if (fg.corte || fg.planta) B.push(FIGS('Corte e seção do fuste com a armadura adotada – solo ' + E(n), [fg.corte, fg.planta]));
         B.push(FIGS('Diagramas de interação das barras adotadas (' + E(x.N1_txt) + ' mm) – solo ' + E(n),
           [grafNM(x.N1_envoltoria, (T.fuste || []).map(c => ({ tipo: c.tipo === 'tracao' ? 'tração' : 'compressão', N: (c.tipo === 'tracao' ? -1 : 1) * c.Nd_kgf, M: Math.abs(c.Md_adot_kgfm) }))), grafMxMy(x.N1_mxmy)]));
@@ -351,7 +352,8 @@
       B.push(legGraf);
       if (cs.length) B.push(TAB('Esforços e verificação por hipótese – solo ' + E(n), ['Hip.', 'Tipo', 'N<sub>d</sub> (kgf)', 'M<sub>1d</sub> (kgf·m)', 'M<sub>1d,mín</sub>', 'λ', 'M<sub>2d</sub>', 'M<sub>d</sub> (kgf·m)', 'A<sub>s,nec</sub> (cm²)', 'M<sub>Rd</sub> (kgf·m)', 'F.S.'],
         cs.map(c => [E(c.hipotese), E(c.tipo), F(c.Nd_kgf, 0), F(c.M1d_kgfm, 0), c.tipo === 'compressão' ? F(c.M1d_min_kgfm, 0) : '—', c.tipo === 'compressão' ? F(c.lambda, 1) : '—', c.tipo === 'compressão' ? F(c.M2d_kgfm, 0) : '—',
-          F(c.Md_kgfm, 0), F(c.As_cm2, 2), F(c.MRd_kgfm, 0), '<b style="color:' + (c.MRd_kgfm >= Math.abs(c.Md_kgfm) ? '#00B050' : '#EE0000') + '">' + F(Math.abs(c.Md_kgfm) > 0 ? c.MRd_kgfm / Math.abs(c.Md_kgfm) : null, 2) + '</b>']), { cls: 'q' }));
+          F(c.Md_kgfm, 0), F(c.As_cm2, 2), F(c.MRd_kgfm, 0), '<b style="color:' + (c.MRd_kgfm >= Math.abs(c.Md_kgfm) ? '#00B050' : '#EE0000') + '">' + F(Math.abs(c.Md_kgfm) > 0 ? c.MRd_kgfm / Math.abs(c.Md_kgfm) : null, 2) + '</b>']),
+        { cls: 'q', cols: ['5%', '12%', '9%', '9%', '8%', '6%', '8%', '9%', '9%', '9%', '6%'] }));
     });
     B.push(H2('Cálculo da armadura de cisalhamento (estribo)'));
     B.push(TT('Verificação ao cisalhamento (Posição N2)', [['Vd_kgf', 'V<sub>d</sub>', 'kgf', 1], ['Vrd2_kgf', 'V<sub>Rd2</sub>', 'kgf', 0], ['Vc_kgf', 'V<sub>c</sub>', 'kgf', 0], ['bitola_estribo_adotada_mm', 'Ø', 'mm', 1], ['espacamento_estribo_adotado_cm', 's', 'cm', 0], ['Vsw_kgf', 'V<sub>sw</sub>', 'kgf', 0], ['criterio_Vsw_maior_Vd', 'V<sub>sw</sub> &gt; V<sub>d</sub>', '-', null], ['Vrd3_kgf', 'V<sub>Rd3</sub>', 'kgf', 0], ['fs_cisalhamento', 'FS', '-', 2], ['cisalhamento', 'Situação', '-', null]]));
@@ -375,6 +377,7 @@
 
     const tocHtml = toc.map(t => '<div class="toc l' + t.lvl + '"><span class="tn">' + t.n + '</span><span class="tt">' + E(t.t) + '</span><span class="dots"></span><span class="tp" data-tocref="' + t.id + '"></span></div>').join('');
     const corpo = B.join('\n').replace('@@TOC@@', tocHtml);
+    if (modo === 'conteudo') return { corpo, titulo, subtitulo, numDoc, rev };
 
     // ---------- capa e cabeçalho ----------
     const L = k => logos[k] ? '<img src="' + logos[k] + '" alt="">' : '';
@@ -425,7 +428,7 @@
       'table.g{width:100%;border-collapse:collapse;table-layout:fixed;font-family:Tahoma,Verdana,sans-serif;margin-bottom:4mm}table.g th,table.g td{border:1px solid #000;padding:1mm 1.5mm;font-size:9.5pt;text-align:center;vertical-align:middle}table.g th{font-weight:700}table.g td.l{text-align:left}' +
       'table.q th,table.q td{font-size:7pt;padding:.8mm .8mm}table.q thead tr:first-child th{font-size:6.5pt}' +
       'table.simb{border-collapse:collapse;font-size:11pt;margin:0 0 3mm 4mm}table.simb td{padding:.6mm 1.5mm;vertical-align:top}table.simb td.s{white-space:nowrap;font-style:italic;font-family:"Times New Roman",serif;font-size:12pt}table.simb td.e{width:6mm;text-align:center}' +
-      '.fig{margin:2mm 0 3mm}.fig p.leg{margin-top:2mm}.figgrid{display:flex;gap:4mm;justify-content:center;align-items:flex-start}.figcel{flex:1 1 0;max-width:92mm}.figcel svg{max-height:95mm}p.nota{font-size:8.5pt;line-height:1.35;margin:0 0 3mm}' +
+      '.fig{margin:2mm 0 3mm}.fig p.leg{margin:2mm 0 2mm}.figgrid{display:flex;gap:4mm;justify-content:center;align-items:flex-start}.figcel{flex:1 1 0;max-width:92mm}.figcel svg{max-height:95mm}p.nota{font-size:8.5pt;line-height:1.35;margin:0 0 3mm}' +
       '.sumtit{font-family:Tahoma,Verdana,sans-serif;font-weight:700;font-size:12pt;text-align:center;margin:0 0 5mm}.toc{display:flex;align-items:baseline;font-family:Tahoma,Verdana,sans-serif;font-size:10pt;margin:0 0 1.6mm}.toc.l1{font-weight:700;margin-top:2.5mm;text-transform:uppercase}.toc.l2{padding-left:5mm}.toc.l3{padding-left:10mm}.toc .tn{width:13mm;flex:none}.toc .dots{flex:1;border-bottom:1px dotted #000;margin:0 1.5mm;transform:translateY(-1mm)}.toc .tp{width:7mm;text-align:right}' +
       '#fonte{position:absolute;left:-9999px;top:0;width:190mm}' +
       '@media print{body{background:#fff}#pages{display:block;padding:0}.page{box-shadow:none;break-after:page;page-break-after:always}.page:last-child{break-after:auto}}';
@@ -435,5 +438,193 @@
       '<template id="tplPage"><section class="page">' + cab + '<div class="corpo"></div></section></template>' +
       '<div id="fonte">' + corpo + '</div>' +
       '<script>(' + paginar.toString() + ')();<\/script></body></html>';
+  };
+})();
+
+// ---------------------------------------------------------------------------
+// Relatório em Word (.docx) editável: converte o mesmo conteúdo da memória de
+// cálculo (títulos, parágrafos, equações, tabelas e figuras) para OOXML com a
+// biblioteca docx (MIT). Figuras SVG viram PNG; títulos usam os estilos de
+// título do Word e o sumário é um campo atualizável.
+// window.RelatorioDocx(run, doc, logos, figs) -> Promise<Blob>
+// ---------------------------------------------------------------------------
+(function () {
+  const DOCX_LOCAL = 'modelo/docx.iife.js', DOCX_CDN = 'https://cdn.jsdelivr.net/npm/docx@9.8.1/dist/index.iife.js';
+  const carregarScript = src => new Promise((ok, falha) => { const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = falha; document.head.appendChild(s); });
+  async function carregarDocx() {
+    if (window.docx && window.docx.Document) return window.docx;
+    try { await carregarScript(DOCX_LOCAL); } catch (e) { /* segue para o CDN */ }
+    if (!(window.docx && window.docx.Document)) await carregarScript(DOCX_CDN);
+    if (!(window.docx && window.docx.Document)) throw new Error('não foi possível carregar a biblioteca docx');
+    return window.docx;
+  }
+
+  // SVG -> PNG (ArrayBuffer), com fundo branco e resolução dobrada
+  function svgParaPng(svgEl, larguraPx) {
+    return new Promise(resolve => {
+      try {
+        const vb = (svgEl.getAttribute('viewBox') || '').split(/[\s,]+/).map(Number);
+        const w0 = vb.length === 4 && vb[2] > 0 ? vb[2] : (parseFloat(svgEl.getAttribute('width')) || 400);
+        const h0 = vb.length === 4 && vb[3] > 0 ? vb[3] : (parseFloat(svgEl.getAttribute('height')) || 300);
+        const W = larguraPx * 2, H = Math.round(W * h0 / w0);
+        const clone = svgEl.cloneNode(true);
+        clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+        clone.setAttribute('width', W); clone.setAttribute('height', H); clone.removeAttribute('style');
+        const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(clone));
+        const img = new Image();
+        img.onload = () => {
+          const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+          const cx = cv.getContext('2d'); cx.fillStyle = '#fff'; cx.fillRect(0, 0, W, H); cx.drawImage(img, 0, 0, W, H);
+          cv.toBlob(b => b ? b.arrayBuffer().then(buf => resolve({ buf, w: larguraPx, h: Math.round(larguraPx * h0 / w0) })) : resolve(null), 'image/png');
+        };
+        img.onerror = () => resolve(null);
+        img.src = url;
+      } catch (e) { resolve(null); }
+    });
+  }
+
+  window.RelatorioDocx = async function (run, doc, logos, figs) {
+    const D = await carregarDocx();
+    const c = window.RelatorioTubulao(run, doc || {}, logos || {}, figs || {}, 'conteudo');
+    const root = new DOMParser().parseFromString('<div id="r">' + c.corpo + '</div>', 'text/html').getElementById('r');
+    const LARG = 9638;                       // largura útil (DXA): A4 com margens de 2 cm
+    const FONTE = 'Arial', FT = 'Tahoma';
+    const borda = { style: D.BorderStyle.SINGLE, size: 4, color: '000000' };
+    const bordas = { top: borda, bottom: borda, left: borda, right: borda };
+    const semBorda = { style: D.BorderStyle.NONE, size: 0, color: 'FFFFFF' };
+    const semBordas = { top: semBorda, bottom: semBorda, left: semBorda, right: semBorda, insideHorizontal: semBorda, insideVertical: semBorda };
+    const cor = st => { const m = /color:\s*(#[0-9a-f]{6}|#[0-9a-f]{3})/i.exec(st || ''); if (!m) return undefined; let h = m[1].slice(1); if (h.length === 3) h = h.split('').map(x => x + x).join(''); return h.toUpperCase(); };
+
+    // texto com formatação (negrito, itálico, índices, cor)
+    function runs(node, fmt, out) {
+      out = out || [];
+      node.childNodes.forEach(n => {
+        if (n.nodeType === 3) {
+          const t = n.textContent.replace(/\s+/g, ' ');
+          if (t) out.push(new D.TextRun(Object.assign({ text: t }, fmt)));
+          return;
+        }
+        if (n.nodeType !== 1) return;
+        const tag = n.tagName.toLowerCase(), f = Object.assign({}, fmt);
+        if (tag === 'br') { out.push(new D.TextRun({ text: '', break: 1 })); return; }
+        if (tag === 'b' || tag === 'strong' || tag === 'th') f.bold = true;
+        if (tag === 'i' || tag === 'em') f.italics = true;
+        if (tag === 'sub') f.subScript = true;
+        if (tag === 'sup') f.superScript = true;
+        if (n.classList && n.classList.contains('tab')) { out.push(new D.TextRun(Object.assign({ text: '  ' }, fmt))); return; }
+        const c2 = cor(n.getAttribute && n.getAttribute('style')); if (c2) f.color = c2;
+        runs(n, f, out);
+      });
+      return out;
+    }
+    const par = (el, o) => new D.Paragraph(Object.assign({ children: runs(el, o && o.fmt ? o.fmt : {}) }, o && o.p ? o.p : {}));
+
+    // tabelas HTML -> tabelas do Word (cabeçalho repetido, colspan, larguras)
+    function tabela(t, o) {
+      o = o || {};
+      const pequena = t.classList.contains('q'), sz = pequena ? 14 : 18;
+      const linhas = Array.from(t.querySelectorAll('tr'));
+      let ncol = 0; linhas.forEach(tr => { ncol = Math.max(ncol, Array.from(tr.children).reduce((a, c) => a + (parseInt(c.getAttribute('colspan')) || 1), 0)); });
+      let pct = Array.from(t.querySelectorAll('col')).map(cc => parseFloat((cc.getAttribute('style') || '').replace(/[^0-9.]/g, '')) || 0);
+      if (pct.length !== ncol || !pct.every(x => x > 0)) pct = Array.from({ length: ncol }, () => 100 / ncol);
+      const soma = pct.reduce((a, b) => a + b, 0), larg = pct.map(p => Math.round(LARG * p / soma));
+      larg[larg.length - 1] += LARG - larg.reduce((a, b) => a + b, 0);
+      const rows = linhas.map(tr => {
+        let ci = 0; const cab = tr.parentElement && tr.parentElement.tagName === 'THEAD';
+        const cells = Array.from(tr.children).map(td => {
+          const span = parseInt(td.getAttribute('colspan')) || 1, w = larg.slice(ci, ci + span).reduce((a, b) => a + b, 0); ci += span;
+          const esq = td.classList.contains('l') || o.esq;
+          return new D.TableCell({ width: { size: w, type: D.WidthType.DXA }, columnSpan: span > 1 ? span : undefined, borders: o.semBorda ? undefined : bordas,
+            verticalAlign: D.VerticalAlign.CENTER, margins: { top: 30, bottom: 30, left: 60, right: 60 },
+            children: [new D.Paragraph({ alignment: esq ? D.AlignmentType.LEFT : D.AlignmentType.CENTER, children: runs(td, { size: o.size || sz, font: o.font || FT, bold: td.tagName === 'TH' || undefined, italics: o.italics || undefined }) })] });
+        });
+        return new D.TableRow({ tableHeader: cab, cantSplit: true, children: cells });
+      });
+      return new D.Table({ width: { size: LARG, type: D.WidthType.DXA }, columnWidths: larg, rows, borders: o.semBorda ? semBordas : undefined });
+    }
+
+    async function figura(el, out) {
+      const leg = el.querySelector('p.leg');
+      if (leg) out.push(par(leg, { fmt: { bold: true, size: 20, font: FT }, p: { alignment: D.AlignmentType.CENTER, keepNext: true, spacing: { before: 160, after: 80 } } }));
+      const svgs = Array.from(el.querySelectorAll('svg')).filter(s => !s.parentElement.closest('svg'));
+      const n = svgs.length, larg = n > 1 ? 300 : 360;
+      // todas as imagens da figura num único parágrafo, logo abaixo do título (mantido junto)
+      const runsImg = [];
+      for (const s of svgs) {
+        const r = await svgParaPng(s, larg);
+        if (!r) continue;
+        if (runsImg.length) runsImg.push(new D.TextRun({ text: '    ' }));
+        // altura máxima de ~13 cm, para título e figura caberem na mesma página
+        const k = Math.min(1, 500 / r.h);
+        runsImg.push(new D.ImageRun({ type: 'png', data: r.buf, transformation: { width: Math.round(r.w * k), height: Math.round(r.h * k) } }));
+      }
+      if (runsImg.length) out.push(new D.Paragraph({ alignment: D.AlignmentType.CENTER, keepLines: true, children: runsImg }));
+      out.push(new D.Paragraph({ children: [], spacing: { after: 80 } }));
+    }
+
+    const corpo = [];
+    let primeiraQuebra = true;
+    for (const el of Array.from(root.children)) {
+      const tag = el.tagName.toLowerCase(), cl = el.classList;
+      if (cl.contains('quebra')) { if (!primeiraQuebra) corpo.push(new D.Paragraph({ children: [new D.PageBreak()] })); primeiraQuebra = false; continue; }
+      if (el.id === 'sumario') {
+        corpo.push(new D.Paragraph({ alignment: D.AlignmentType.CENTER, spacing: { after: 240 }, children: [new D.TextRun({ text: 'SUMÁRIO', bold: true, size: 24, font: FT })] }));
+        corpo.push(new D.TableOfContents('Sumário', { hyperlink: true, headingStyleRange: '1-3' }));
+        continue;
+      }
+      if (tag === 'h1' || tag === 'h2' || tag === 'h3') {
+        const lv = { h1: D.HeadingLevel.HEADING_1, h2: D.HeadingLevel.HEADING_2, h3: D.HeadingLevel.HEADING_3 }[tag];
+        corpo.push(new D.Paragraph({ heading: lv, keepNext: true, children: runs(el, {}) }));
+        continue;
+      }
+      if (cl.contains('eq')) { corpo.push(par(el, { fmt: { italics: true, font: 'Cambria Math', size: 22 }, p: { alignment: D.AlignmentType.CENTER, spacing: { before: 60, after: 120 } } })); continue; }
+      if (cl.contains('fig')) { await figura(el, corpo); continue; }
+      if (tag === 'table') {
+        if (cl.contains('simb')) corpo.push(tabela(el, { semBorda: true, esq: true, size: 20, font: FONTE }));
+        else corpo.push(tabela(el));
+        corpo.push(new D.Paragraph({ children: [], spacing: { after: 120 } }));
+        continue;
+      }
+      if (tag === 'p') {
+        if (cl.contains('leg')) corpo.push(par(el, { fmt: { bold: true, size: 20, font: FT }, p: { alignment: D.AlignmentType.CENTER, keepNext: true, spacing: { before: 160, after: 80 } } }));
+        else if (cl.contains('ref')) corpo.push(par(el, { fmt: { size: 22 }, p: { indent: { left: 567, hanging: 567 }, spacing: { after: 60 } } }));
+        else if (cl.contains('nota')) corpo.push(par(el, { fmt: { size: 17 }, p: { spacing: { after: 120 } } }));
+        else corpo.push(par(el, { fmt: { size: 22 }, p: { alignment: D.AlignmentType.JUSTIFIED, spacing: { after: 120, line: 320 } } }));
+        continue;
+      }
+      if (el.textContent.trim()) corpo.push(par(el, { fmt: { size: 22 } }));
+    }
+
+    // cabeçalho no padrão da memória de cálculo
+    const E = s => String(s == null ? '' : s);
+    const cel = (w, kids, o) => new D.TableCell(Object.assign({ width: { size: w, type: D.WidthType.DXA }, borders: bordas, verticalAlign: D.VerticalAlign.CENTER, margins: { top: 40, bottom: 40, left: 80, right: 80 }, children: kids }, o || {}));
+    const txt = (t, o) => new D.Paragraph({ alignment: (o && o.al) || D.AlignmentType.LEFT, children: [].concat(t).map(x => typeof x === 'string' ? new D.TextRun(Object.assign({ text: x, font: FT, size: 16 }, o && o.r)) : x) });
+    const w1 = 1300, w2 = LARG - w1 - 2600, w3 = 2600;
+    const cabecalho = new D.Table({ width: { size: LARG, type: D.WidthType.DXA }, columnWidths: [w1, w2, w3], rows: [
+      new D.TableRow({ children: [cel(w1 + w2, [txt('MEMÓRIA DE CÁLCULO', { r: { bold: true, size: 26 } })], { columnSpan: 2 }),
+        cel(w3, [txt(['Nº PROJETO: ' + E(c.numDoc) + '   REV: ' + E(c.rev)], { r: { size: 14, bold: true } }),
+          new D.Paragraph({ children: [new D.TextRun({ font: FT, size: 16, children: ['FOLHA ', D.PageNumber.CURRENT, ' de ', D.PageNumber.TOTAL_PAGES] })] })])] }),
+      new D.TableRow({ children: [cel(w1, [txt('TÍTULO:', { r: { bold: true, size: 12 } })]), cel(w2 + w3, [txt(E(c.titulo), { al: D.AlignmentType.CENTER, r: { bold: true, size: 18 } })], { columnSpan: 2 })] }),
+      new D.TableRow({ children: [cel(w1, [txt('SUBTÍTULO:', { r: { bold: true, size: 12 } })]), cel(w2 + w3, [txt(E(c.subtitulo) + ' – MEMÓRIA DE CÁLCULO', { al: D.AlignmentType.CENTER, r: { bold: true, size: 18 } })], { columnSpan: 2 })] }),
+    ] });
+
+    const documento = new D.Document({
+      creator: 'Software de Fundações', title: E(c.subtitulo) + ' – Memória de Cálculo',
+      features: { updateFields: true },
+      styles: {
+        default: { document: { run: { font: FONTE, size: 22 } } },
+        paragraphStyles: [
+          { id: 'Heading1', name: 'Heading 1', basedOn: 'Normal', next: 'Normal', quickFormat: true, run: { font: FT, size: 24, bold: true }, paragraph: { spacing: { before: 360, after: 180 }, outlineLevel: 0 } },
+          { id: 'Heading2', name: 'Heading 2', basedOn: 'Normal', next: 'Normal', quickFormat: true, run: { font: FT, size: 22, bold: true }, paragraph: { spacing: { before: 280, after: 140 }, outlineLevel: 1 } },
+          { id: 'Heading3', name: 'Heading 3', basedOn: 'Normal', next: 'Normal', quickFormat: true, run: { font: FT, size: 22 }, paragraph: { spacing: { before: 220, after: 120 }, outlineLevel: 2 } },
+        ],
+      },
+      sections: [{
+        properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 1134, bottom: 1134, left: 1134, right: 1134, header: 567, footer: 567 } } },
+        headers: { default: new D.Header({ children: [cabecalho, new D.Paragraph({ children: [] })] }) },
+        children: corpo,
+      }],
+    });
+    return D.Packer.toBlob(documento);
   };
 })();
