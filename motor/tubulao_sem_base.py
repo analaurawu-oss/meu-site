@@ -383,7 +383,7 @@ def dimensionar_n1_abaco(solo, geometria, materiais, fatores, cargas_compressao,
         armaduras.alfa_gancho * (as_calculada / as_adotada) * max(lb, lb_min))
     )
     # Adota sempre o próximo múltiplo de 5 cm, sem reduzir o valor calculado.
-    transpasse = math.ceil(transpasse_calculado / 5) * 5
+    transpasse = math.ceil(round(transpasse_calculado / 5, 10)) * 5
 
     return {
         "hipotese_compressao_n1": caso_c[0], "Nd_compressao_kgf": caso_c[1], "Md_compressao_kgfm": caso_c[2],
@@ -869,7 +869,7 @@ def dimensionar_n1(*args, **kwargs):
 
 def _arredondar_transpasse(transpasse_calculado, fator_momento):
     # Adota sempre o próximo múltiplo de 5 cm, sem reduzir o valor calculado.
-    return math.ceil(transpasse_calculado / 5) * 5
+    return math.ceil(round(transpasse_calculado / 5, 10)) * 5
 
 
 def dimensionar_n2(geometria, materiais, todas_cargas, armaduras):
@@ -1015,6 +1015,20 @@ def _quantitativos(nome_solo, r, afloramentos_cm, tipo):
             "linhas": linhas}
 
 
+def _padronizar_transpasse(resultados):
+    # Padroniza o transpasse de N1: adota o maior valor entre os solos calculados.
+    # O valor de cada solo fica em transpasse_calculado_cm.
+    validos = [r for r in resultados.values() if "transpasse_cm" in r]
+    if not validos:
+        return
+    maior = max(r["transpasse_cm"] for r in validos)
+    solo_maior = next(n for n, r in resultados.items() if r.get("transpasse_cm") == maior)
+    for r in validos:
+        r["transpasse_calculado_cm"] = r["transpasse_cm"]
+        r["transpasse_cm"] = maior
+        r["transpasse_definido_pelo_solo"] = solo_maior
+
+
 def _afl(e, nome):
     a = e["afloramentos_cm"]
     return a.get(nome, []) if isinstance(a, dict) else a
@@ -1033,7 +1047,10 @@ def rodar(entrada_json):
     EXCENTRICIDADE_VERTICAL_MM = STUB_CALCULADO["x_real_mm"]
     EXCENTRICIDADE_HORIZONTAL_MM = float(e.get("excentricidade_horizontal_mm", 0.0))
     MATERIAIS = Materiais(**e["materiais"])
-    SOLOS = [Solo(**s) for s in e["solos"]]
+    solos_in = [dict(x) for x in e["solos"]]
+    # posição original do solo na tipificação (a precisão de tan φ depende dela, mesmo com solos desmarcados)
+    ORDEM_SOLOS = {d["nome"]: d.pop("ordem", i) for i, d in enumerate(solos_in)}
+    SOLOS = [Solo(**d) for d in solos_in]
     GEOMETRIAS = {k: Geometria(**v) for k, v in e["geometrias"].items()}
     CARGAS_COMPRESSAO = [Carga(**c) for c in e["cargas_compressao"]]
     CARGAS_TRACAO = [Carga(**c) for c in e["cargas_tracao"]]
@@ -1043,7 +1060,7 @@ def rodar(entrada_json):
     for indice, solo in enumerate(SOLOS):
         try:
             geometria = GEOMETRIAS[solo.nome]
-            fatores = fatores_solo(solo, indice)
+            fatores = fatores_solo(solo, ORDEM_SOLOS[solo.nome])
             linha = {"solo": solo.nome, "D_m": geometria.diametro_m, "L_enterrado_m": geometria.comprimento_enterrado_m}
             linha.update(verificar_compressao(solo, geometria, MATERIAIS, fatores, CARGAS_COMPRESSAO))
             linha.update(verificar_tombamento(solo, geometria, MATERIAIS, fatores, todas_cargas))
@@ -1058,6 +1075,7 @@ def rodar(entrada_json):
             quantitativos[solo.nome] = _quantitativos(solo.nome, linha, _afl(e, solo.nome), TIPO_DE_FUNDACAO)
         except Exception as ex:
             erros[solo.nome] = f"{type(ex).__name__}: {ex}"
+    _padronizar_transpasse(resultados)
     return json.dumps({"solos": [s.nome for s in SOLOS], "stub": STUB_CALCULADO,
                        "excentricidade_vertical_mm": EXCENTRICIDADE_VERTICAL_MM,
                        "resultados": resultados, "quantitativos": quantitativos, "erros": erros}, default=float)
