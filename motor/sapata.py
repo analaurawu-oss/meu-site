@@ -842,6 +842,18 @@ def _minimo(df, col):
     i = v.idxmin()
     return float(v.loc[i]), str(df.loc[i, "hipotese"])
 
+def _padronizar_transpasses(resultados):
+    # Padroniza os transpasses: para cada posição (N1, N3, N4) adota o maior valor entre os solos calculados.
+    # O valor de cada solo fica em <posição>_transpasse_calculado_cm.
+    for chave in ("N1_transpasse_cm", "N3_transpasse_cm", "N4_transpasse_cm"):
+        validos = [(n, r) for n, r in resultados.items() if r.get(chave) is not None]
+        if not validos:
+            continue
+        maior = max(r[chave] for _, r in validos)
+        for _, r in validos:
+            r[chave.replace("_cm", "_calculado_cm")] = r[chave]
+            r[chave] = maior
+
 def rodar(entrada_json):
     global NOME_TORRE, COEF_GEO, COEF_ESTR, MATERIAIS, CARGAS_COMPRESSAO, CARGAS_TRACAO, STUB_DADOS, METODO_N1
     e = json.loads(entrada_json)
@@ -897,5 +909,6 @@ def rodar(entrada_json):
             quant[nome] = dict(n1=f"N1 — {n1['n']} Ø {n1['phi_mm']:g} mm", n2=f"N2 — Ø {n2['phi_mm']:g} mm c/{n2['esp_cm']:g} cm", linhas=q)
         except Exception as ex:
             erros[nome] = f"{type(ex).__name__}: {ex}"
+    _padronizar_transpasses(resultados)
     return json.dumps(_limpa({"solos": [s["nome"] for s in e["solos"]], "stub": stub, "resultados": resultados,
                               "tabelas": tabelas, "quantitativos": quant, "erros": erros}))
