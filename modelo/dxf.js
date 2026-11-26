@@ -433,8 +433,11 @@
       cotaV(P, xc - r - 24, yb + cob * kc, ytop - slope - cob * kc, xc - r, 'C = ' + cm(n1Unit * 100) + ' (VAR.)', 1.8); quebraDim(xc - r - 24);
       P.L('ARX-CV-Armadura').ln(xc + r + 14, yb + cob * kc, xc + r + 14, ytop - slope - cob * kc);
       P.L('ARX-GR-Texto').tx(xc + r + 12, (yb + ytop) / 2 + 10, 1.9, 'N1 - ' + nBar + ' - Ø' + fmt(X.phi1, 1), 'center', 'baseline', 90).tx(xc + r + 18.5, (yb + ytop) / 2 + 10, 1.9, 'VAR.', 'center', 'baseline', 90);
-      chamada(P, xc - r * 0.3, ytop - 9 * kc / 25, xc - r - 22, ytop + 16, ['FIO 12 BWG, DE AÇO GALVANIZADO', '(NÃO DEVERÁ ESTAR ESTICADO, A FIM DE', 'FACILITAR A CONCRETAGEM)'], 1.6);
-      chamada(P, xc + r * 0.8, ytop - 12 * kc / 25, xc + r + 6, ytop + 8, ['FIXAÇÃO COM ARAME', 'DE FERRO RECOZIDO'], 1.6);
+      const hUp = ytop - (qb ? yUpBot : yb), yw1 = ytop - slope - 0.22 * hUp, yw2 = ytop - slope - 0.46 * hUp;
+      const fio = yc => { const pts = [], amp = Math.min(3.2, r * 0.7); for (let k = 0; k <= 30; k++) { const t = k / 30; pts.push([xc - r + 2 * r * t, yc + amp * Math.sin(2 * Math.PI * 1.5 * t)]); } P.L('ARX-CV-Contorno').pl(pts, false, 0.25); };
+      fio(yw1); fio(yw2);
+      chamada(P, xc - r * 0.85, yw1, xc - r - 22, ytop + 16, ['FIO 12 BWG, DE AÇO GALVANIZADO', '(NÃO DEVERÁ ESTAR ESTICADO, A FIM DE', 'FACILITAR A CONCRETAGEM)'], 1.6);
+      chamada(P, xc + r * 0.85, yw2, xc + r + 6, ytop + 8, ['FIXAÇÃO COM ARAME', 'DE FERRO RECOZIDO'], 1.6);
       if (S) {
         chamada(P, xc + (Db / 2 - cob) * kc * 0.6, yb + cob * kc, xc + Db * kc / 2 + 10, yb + 9, 'N4 - ' + rotBase, 1.7);
         chamada(P, xc + (Db / 2 - cob) * kc * 0.75, yb + (Lb - cob) * kc, xc + Db * kc / 2 + 10, Math.max(yb + Lb * kc + 8, yb + 17), 'N3 - ' + rotBase, 1.7);
@@ -525,10 +528,14 @@
       [b2, -b2].forEach(a => P.C(2).ln(xM - Math.sin(a) * 6, yM - Math.cos(a) * 6, xM + Math.sin(a) * Lr, yM + Math.cos(a) * Lr).C(null));
       P.L('ARX-GR-LTracejada').C(1).ln(xM, yM + 6, xM, yM - Lr).C(null);
       P.L('ARX-GR-Texto').tx(xM - 2.2, yM - Lr + 2, 1.8, 'BISSETRIZ DO ÂNGULO DA LINHA', 'left', 'baseline', 90).tx(xM + 4.5, yM - Lr + 2, 1.8, 'DIRETRIZ DA LT', 'left', 'baseline', 90);
+      const aD = deg(Math.atan2(dyM, dxM));                       // ângulos da diagonal com os eixos (45° quando a base é quadrada)
+      P.L('ARX-GR-Cota').arco(xM, yM, 22, 180, 180 + aD, 10).arco(xM, yM, 28, 180 + aD, 270, 10);
+      P.L('ARX-GR-Texto').tx(xM + 25 * Math.cos(rad(180 + aD / 2)) - 2, yM + 25 * Math.sin(rad(180 + aD / 2)) + 1, 1.5, fmt(aD, 1) + '°', 'right', 'baseline').tx(xM + 31 * Math.cos(rad(180 + aD + (90 - aD) / 2)) - 1, yM + 31 * Math.sin(rad(180 + aD + (90 - aD) / 2)) - 3, 1.5, fmt(90 - aD, 1) + '°', 'right', 'baseline');
       if (dl > 0) {
         P.L('ARX-GR-Cota').arco(xM, yM, 34, -90 - dl / 2, -90 + dl / 2, 12).arco(xM, yM, 44, -90, -90 + dl / 2, 8);
+        chamada(P, xM + 34 * Math.cos(rad(-90 + dl / 2)), yM + 34 * Math.sin(rad(-90 + dl / 2)), xM + 22, yM - 60, 'ÂNGULO DA LT', 1.8);
         P.L('ARX-GR-Texto').tx(xM, yM - 49, 1.8, 'β = ' + fmt(dl, 1) + '°', 'center', 'baseline').tx(xM + 3, yM - 44, 1.6, 'β/2', 'left', 'baseline');
-      } else P.L('ARX-GR-Texto').tx(xM + 3, yM - 30, 1.8, 'β = 0° (SEM DEFLEXÃO)', 'left', 'baseline');
+      } else P.L('ARX-GR-Texto').tx(xM + 6, yM + 3, 1.7, 'β = 0° (SEM DEFLEXÃO)', 'left', 'baseline');
       // cotas: A na horizontal e na vertical, D na diagonal, e as projeções do stub
       const ph = vis * Math.sin(aTrans) * 100, pv = vis * Math.sin(aLong) * 100, pd = vis * Math.sin(beta) * 100;
       cotaH(P, Fx, xM, Fy - rb - 12, Fy - rb - 2, 'A = ' + cm(dxM * 100), 1.9);
@@ -554,6 +561,7 @@
         if (S) { P.L('ARX-GR-LContínua').rect(px - rb, py - rb, px + rb, py + rb); P.L('ARX-GR-LTracejada').rect(px - r, py - r, px + r, py + r); }
         else { P.L('ARX-GR-LContínua').ci(px, py, r); if (comBase) P.L('ARX-GR-LTracejada').ci(px, py, rb); }
         cantoneira(P, px, py, Math.max(aba * k, 1.4), Math.max(espStub * k, 0.3), e[1] * e[2] > 0 ? 180 : 0);
+        P.L('ARX-GR-Simbolo').C(1).ci(px, py, 1.3).C(null);
         P.L('ARX-GR-Texto').tx(px + (e[1] > 0 ? 1 : -1) * (rb + 2), py + (e[2] > 0 ? 1 : -1) * (rb + 2) - (e[2] > 0 ? 0 : 2), 2.0, 'PÉ "' + e[0] + '"', e[1] > 0 ? 'left' : 'right', 'baseline');
       });
       P.L('ARX-GR-Simbolo').C(1).ci(cx, cy, 1.4).C(null);
@@ -576,13 +584,13 @@
     {
       const lin = X.linhas, x0t = 442, W = 170, topo = 200, fundo = 57;
       const colunas = S ? [
-        ['G\n(cm)', 12, l => cm(l.G_cm)], ['H\n(m)', 11, l => fmt(l.H_m, 2)], ['CONCR.\n(m³)', 15, l => fmt(l.concreto_m3, 2)], ['ESCAV.\n(m³)', 15, l => fmt(l.escavacao_m3, 2)],
-        ['REATERRO\n(m³)', 17, l => fmt(l.reaterro_m3, 2)],
+        ['G\n(cm)', 12, l => cm(l.G_cm)], ['H\n(m)', 11, l => fmt(l.H_m, 2)], ['CONCR.\n(m³)', 15, l => fmt(l.concreto_m3, 2)], ['ESCAV.\n(m³)', 15, l => fmt(l.escavacao_m3, 2), true],
+        ['REATERRO\n(m³)', 17, l => fmt(l.reaterro_m3, 2), true],
         ['UNIT.\n(m)', 14, l => fmt(l.N1_unit_m, 2)], ['PESO\n(kgf)', 14, l => fmt(l.N1_kg, 0)],
         ['QUANT.\n"n"', 13, l => l.N2_qtd], ['PESO\n(kgf)', 13, l => fmt(l.N2_kg, 0)],
         ['N3 + N4\n(kgf)', 17, l => fmt(l.base_kg, 0)], ['TOTAL\n(kgf)', 17, l => fmt(l.aco_total_kg, 0)],
       ] : [
-        ['G\n(cm)', 12, l => cm(l.G_cm)], ['H\n(m)', 11, l => fmt(l.H_m, 2)], ['CONCR.\n(m³)', 15, l => fmt(l.concreto_m3, 2)], ['ESCAV.\n(m³)', 15, l => fmt(l.escavacao_m3, 2)],
+        ['G\n(cm)', 12, l => cm(l.G_cm)], ['H\n(m)', 11, l => fmt(l.H_m, 2)], ['CONCR.\n(m³)', 15, l => fmt(l.concreto_m3, 2)], ['ESCAV.\n(m³)', 15, l => fmt(l.escavacao_m3, 2), true],
         ['UNIT.', 12, l => fmt(l.n1_comp_unit_m, 2)], ['TOTAL', 12, l => fmt(l.n1_comp_total_m, 0)], ['PESO\n(kgf)', 12, l => fmt(l.n1_peso_kgf, 0)],
         ['QUANT.\n"n"', 13, l => l.n2_quantidade], ['COMPR.\nTOTAL (m)', 17, l => fmt(l.n2_comp_total_m, 0)], ['PESO\n(kgf)', 12, l => fmt(l.n2_peso_kgf, 0)], ['PESO\nTOTAL (kgf)', 17, l => fmt(l.peso_total_kgf, 0)],
       ];
@@ -603,14 +611,18 @@
       P.L('ARX-GR-Texto');
       P.tx((n1a + n1b) / 2, yTit - 9.6, 1.4, 'N1 - ' + nBar + ' Ø' + fmt(X.phi1, 1), 'center', 'baseline');
       P.tx((n1b + n2b) / 2, yTit - 9.6, 1.4, 'N2 - Ø' + fmt(X.phi2, 1) + ' - ' + cm(n2CompCm), 'center', 'baseline');
-      colunas.forEach((c, j) => { c[0].split('\n').forEach((t, q) => P.tx((xs[j] + xs[j + 1]) / 2, yGrp - 4.2 - q * 2.4, 1.35, t, 'center', 'baseline')); });
-      if (!S) P.tx((xs[4] + xs[6]) / 2 + (xs[5] - xs[4]) / 2, yGrp + 0.5, 1.2, '', 'center', 'baseline');
+      colunas.forEach((c, j) => { const dyc = (!S && (j === 4 || j === 5)) ? 5.5 : 0; c[0].split('\n').forEach((t, q) => P.tx((xs[j] + xs[j + 1]) / 2, yGrp - 4.2 - dyc - q * 2.4, 1.35, t, 'center', 'baseline')); });
+      if (!S) { P.tx((xs[4] + xs[6]) / 2, yGrp - 3.4, 1.35, 'COMPR. (m)', 'center', 'baseline'); P.L('FORMATO').ln(xs[4], yGrp - 5.4, xs[6], yGrp - 5.4).ln(xs[5], yGrp - 5.4, xs[5], yDat0); P.L('ARX-GR-Texto'); }
+      // colunas de valor constante (escavação, reaterro) viram uma célula mesclada, como no modelo
+      const mesc = colunas.map((c, j) => (c[3] && lin.every(l => c[2](l) === c[2](lin[0]))) ? j : -1).filter(j => j >= 0);
+      const linhaH = y => { let a = x0t; mesc.forEach(j => { P.ln(a, y, xs[j], y); a = xs[j + 1]; }); P.ln(a, y, x0t + W, y); };
       lin.forEach((l, n) => {
         const t = Math.min(hl * 0.42, 2.2);
         P.L('ARX-GR-Texto');
-        colunas.forEach((c, j) => P.tx((xs[j] + xs[j + 1]) / 2, yy(n) - hl / 2 - t / 2 + 0.2, t, c[2](l), 'center', 'baseline'));
-        P.L('FORMATO').ln(x0t, yy(n + 1), x0t + W, yy(n + 1));
+        colunas.forEach((c, j) => { if (mesc.indexOf(j) < 0) P.tx((xs[j] + xs[j + 1]) / 2, yy(n) - hl / 2 - t / 2 + 0.2, t, c[2](l), 'center', 'baseline'); });
+        P.L('FORMATO'); if (n + 1 < lin.length) linhaH(yy(n + 1));
       });
+      mesc.forEach(j => P.L('ARX-GR-Texto').tx((xs[j] + xs[j + 1]) / 2, (yDat0 + yFim) / 2 - 1, 2.2, colunas[j][2](lin[0]), 'center', 'baseline'));
       P.L('ARX-GR-Texto').tx(x0t, yFim - 4, 1.6, 'N1 = ' + cm(n1Unit * 100) + ' cm (COMPRIMENTO UNITÁRIO PARA O G MÁXIMO); VOLUMES E PESOS TEÓRICOS.', 'left', 'baseline');
     }
 
