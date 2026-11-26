@@ -38,7 +38,19 @@
       tx(x, y, h, s, al, v, rot) {
         d.drawText(ox + x, oy + y, h, rot || 0, String(s), al || 'left', v || 'baseline');
         const sh = d.activeLayer.shapes[d.activeLayer.shapes.length - 1], pr = Object.getPrototypeOf(sh);
-        if (!pr.__arial) { const orig = pr.tags; pr.tags = function (m) { orig.call(this, m); m.push(7, 'Arial'); }; pr.__arial = true; }   // estilo de texto Arial, como no modelo
+        if (!pr.__arial) {                                  // estilo de texto Arial (grupo 7), na posição correta do TEXT: antes dos grupos de alinhamento
+          const base = Object.getPrototypeOf(pr), H = ['left', 'center', 'right'], V = ['baseline', 'bottom', 'middle', 'top'];
+          pr.tags = function (m) {
+            m.push(0, 'TEXT'); base.tags.call(this, m);
+            m.push(8, this.layer.name); m.point(this.x, this.y); m.push(40, this.height); m.push(1, this.value); m.push(50, this.rotation);
+            m.push(7, 'Arial');
+            if (H.includes(this.hAlign, 1) || V.includes(this.vAlign, 1)) {
+              m.push(72, Math.max(H.indexOf(this.hAlign), 0)); m.push(11, this.x); m.push(21, this.y); m.push(31, 0);
+              m.push(100, 'AcDbText'); m.push(73, Math.max(V.indexOf(this.vAlign), 0));
+            } else m.push(100, 'AcDbText');
+          };
+          pr.__arial = true;
+        }
         return P;
       },
       rect(x1, y1, x2, y2) { return P.pl([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], true); },
