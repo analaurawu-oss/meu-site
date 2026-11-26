@@ -6,7 +6,7 @@
 (function () {
   const A1 = { w: 841, h: 594 };
   const GAP = 80;                     // distância entre pranchas no modelo
-  const ESCALAS = [2, 5, 10, 20, 25, 40, 50, 75, 100, 125, 150, 200, 250, 300, 400, 500];
+  const ESCALAS = [2, 5, 10, 20, 25, 30, 40, 50, 75, 100, 125, 150, 200, 250, 300, 400, 500];
   const GEOM_PADRAO = { largura_aba_mm: 150, base_transversal_m: 6, base_longitudinal_m: 6, deflexao_graus: 0 };
 
   const LAYERS = [
@@ -290,12 +290,12 @@
     const H = Lenc + Gmax;
     let qb = null;
     if (!S) {
-      const topVis = Gmax + 1.0, botVis = comBase ? Lb + La + 0.6 : 1.0, rem = H - topVis - botVis;
+      const topVis = Gmax + 0.6, botVis = comBase ? Lb + La + 0.5 : 0.8, rem = H - topVis - botVis;
       if (rem >= 1.0) qb = { z1: botVis, z2: H - topVis, rem };
     }
-    const yb = 383;                                                      // fundo do concreto (como no modelo)
-    const n0 = menorEscala(Db * 1000, (H - (qb ? qb.rem : 0) + 0.35 + vis + 0.1) * 1000, 70, 160);
-    const escCorte = Math.max(n0, menorEscala(dD * 1000, 1, 135, 1));    // a distância ao marco central também precisa caber
+    const yb = 355;                                                      // fundo do concreto: desce em relação ao modelo para dar altura à elevação
+    const n0 = menorEscala(Db * 1000, (H - (qb ? qb.rem : 0) + 0.35 + vis + 0.1) * 1000, 70, 198);
+    const escCorte = Math.max(n0, menorEscala(dD * 1000, 1, 145, 1));    // a distância ao marco central também precisa caber
     const kc = 1000 / escCorte;                                          // mm de papel por metro real
     const sA = qb ? Math.max(0.32 * D * kc / 2, 3.4) : 0, sB = 0.85 * sA, sC = 0.29 * sA;   // flechas das curvas de ruptura (tigela, calombo e lente), como no modelo
     const yLowTop = qb ? yb + qb.z1 * kc : 0, yUpBot = qb ? yLowTop + sA + sB + 4 : 0;       // linhas-base do topo da peça de baixo e do fundo da peça de cima
@@ -409,8 +409,8 @@
       tituloVista(P, o.tit[0], o.tit[1], o.nome, 'ESC. 1:' + escCorte);
       return { yRef, xUp };
     };
-    const cA = corte(116, { dist: dxM, th: aTrans, rot: 'A', nome: 'ELEVAÇÃO', tit: [92.5, 344.1], tube: false });
-    const cB = corte(381, { dist: dD, th: beta, rot: 'D', nome: 'SEÇÃO A', tit: [364.5, 356.4], tube: true });
+    const cA = corte(116, { dist: dxM, th: aTrans, rot: 'A', nome: 'ELEVAÇÃO', tit: [92.5, 332], tube: false });
+    const cB = corte(381, { dist: dD, th: beta, rot: 'D', nome: 'SEÇÃO A', tit: [364.5, 332], tube: true });
 
     // triângulo com a angulação do stub (inclinação real)
     {
@@ -424,7 +424,7 @@
 
     // ---------------- ARMADURA: contorno vermelho, gaiola verde e stub ----------------
     {
-      const xc = 557, r = D * kc / 2;
+      const xc = 580, r = D * kc / 2;
       contorno(xc, 'ARX-CV-Contorno'); armaduraCorte(xc);
       const sb = desenhaStub(xc, aTrans);
       P.L('ARX-GR-LCentro').ln(xc, yb - 6, xc, Math.max(ytop, sb.pOut[1]) + 6);
@@ -445,7 +445,7 @@
       const yB = Y(qb ? qb.z1 * 0.45 : Lenc * 0.3);
       marcaCorte(P, xc - Math.max(r, Db * kc / 2) - 14, yB, 'B', 1, 0); marcaCorte(P, xc + Math.max(r, Db * kc / 2) + 14, yB, 'B', -1, 0);
       P.L('ARX-GR-Cota').C(5).ln(xc - Math.max(r, Db * kc / 2) - 14, yB, xc + Math.max(r, Db * kc / 2) + 14, yB).C(null);
-      tituloVista(P, 536.7, 375.1, 'ARMADURA', 'ESC. 1:' + escCorte);
+      tituloVista(P, 536.7, 332, 'ARMADURA', 'ESC. 1:' + escCorte);
     }
 
     // ---------------- SEÇÃO B (corte com a armadura transversal) e anel do N2 ----------------
@@ -514,7 +514,7 @@
       const r = D * k / 2, rb = Db * k / 2, L = Math.hypot(xM - Fx, yM - Fy), ux = (xM - Fx) / L, uy = (yM - Fy) / L;
       P.L('ARX-GR-LCentro');
       const yEixo = cA.yRef + 22;                       // os eixos do tubulão e do marco central sobem da planta até a elevação
-      P.ln(Fx - rb - 20, Fy, xM + 24, Fy).ln(Fx, Fy - rb - 22, Fx, yEixo).ln(xM, Fy - rb - 22, xM, yEixo).ln(Fx - 10, yM, xM + 24, yM);
+      P.ln(Fx - rb - 20, Fy, xM + 24, Fy).ln(Fx, Fy - rb - 22, Fx, yEixo).ln(xM, Fy - rb - 22, xM, yEixo).ln(Fx + 42, yM, xM + 24, yM);   // o eixo horizontal do marco não atravessa a base da elevação
       P.ln(Fx - ux * 40, Fy - uy * 40, xM + ux * 24, yM + uy * 24);
       marcaCorte(P, Fx - ux * 42, Fy - uy * 42, 'A', -uy, ux); marcaCorte(P, xM + ux * 26, yM + uy * 26, 'A', -uy, ux);
       if (S) { P.L('ARX-GR-LContínua').rect(Fx - rb, Fy - rb, Fx + rb, Fy + rb); P.L('ARX-GR-LTracejada').rect(Fx - r, Fy - r, Fx + r, Fy + r); }
