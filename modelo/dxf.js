@@ -1,5 +1,7 @@
 // Desenhos de fundação em DXF — tubulão sem base, tubulão com base e sapata; uma prancha A1 (841 × 594 mm) por solo.
-// window.DxfFundacao(run, doc, geom) -> texto DXF (AutoCAD 2007, UTF-8). Requer modelo/dxf-writer.js.
+// window.DxfFundacao(run, doc, geom, rodarPy) -> Promise<texto DXF>. O gerador calcula a geometria em escala e descreve o
+// desenho como operações; o motor Python (motor/desenho_dxf.py, biblioteca ezdxf) monta o DXF com objetos nativos do AutoCAD:
+// cotas (DIMENSION) que medem a geometria, blocos com atributos (carimbo, título de vista, marca de corte), chamadas (MULTILEADER) e hachuras.
 // Arranjo, carimbo, símbolos, layers, cores e fontes copiados do modelo Autoportante_T / Autoportante_TB;
 // ao contrário do modelo (sem escala), cada vista é desenhada em escala real (1:n escolhida para caber na prancha)
 // e as cotas mostram o valor real, em centímetros.
@@ -8,15 +10,6 @@
   const GAP = 80;                     // distância entre pranchas no modelo
   const ESCALAS = [2, 5, 10, 20, 25, 30, 40, 50, 75, 100, 125, 150, 200, 250, 300, 400, 500];
   const GEOM_PADRAO = { largura_aba_mm: 150, base_transversal_m: 6, base_longitudinal_m: 6, deflexao_graus: 0 };
-
-  const LAYERS = [
-    ['ARX-CV-Contorno', 1, 'CONTINUOUS'], ['ARX-CV-Armadura', 3, 'CONTINUOUS'], ['STUB', 1, 'CONTINUOUS'],
-    ['ARX-GR-Cota', 12, 'CONTINUOUS'], ['ARX-GR-Texto', 7, 'CONTINUOUS'], ['ARX-GR-Solo', 4, 'CONTINUOUS'],
-    ['ARX-GR-Hachuras', 7, 'CONTINUOUS'], ['ARX-GR-LCentro', 7, 'ACAD_ISO04W100'], ['ARX-GR-LTracejada', 7, 'ACAD_ISO02W100'],
-    ['ARX-GR-LContínua', 2, 'CONTINUOUS'], ['ARX-GR-LAuxiliar', 7, 'CONTINUOUS'], ['ARX-GR-Simbolo', 7, 'CONTINUOUS'],
-    ['ARX-GR-Detalhe', 7, 'CONTINUOUS'], ['FORMATO', 7, 'CONTINUOUS'],
-  ];
-  const ESTILOS = [['Arial', 'arial.ttf'], ['ROMANS', 'romans.shx'], ['style2', 'tahoma.ttf']];   // estilos de texto do modelo
 
   const num = (v, d) => (v === null || v === undefined || v === '' || isNaN(v)) ? (d === undefined ? 0 : d) : Number(v);
   const fmt = (v, d) => Number(v).toLocaleString('pt-BR', { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -29,125 +22,80 @@
     return ESCALAS[ESCALAS.length - 1];
   }
 
-  // ---------- caneta com deslocamento (cada prancha tem a sua origem), cor explícita e estilo de texto ----------
-  function caneta(d, ox, oy) {
-    const H = ['left', 'center', 'right'], V = ['baseline', 'bottom', 'middle', 'top'];
-    const fim = () => {                                       // aplica cor explícita (grupo 62) à última forma
-      const sh = d.activeLayer.shapes[d.activeLayer.shapes.length - 1], pr = Object.getPrototypeOf(sh);
-      sh.aci = P.aci; sh.sty = P.sty;
-      if ('hAlign' in sh) {                                   // TEXT: estilo (grupo 7) na posição certa, antes dos grupos de alinhamento
-        if (!pr.__txt) {
-          const base = Object.getPrototypeOf(pr);
-          pr.tags = function (m) {
-            m.push(0, 'TEXT'); base.tags.call(this, m);
-            m.push(8, this.layer.name); if (this.aci != null) m.push(62, this.aci);
-            m.point(this.x, this.y); m.push(40, this.height); m.push(1, this.value); m.push(50, this.rotation);
-            m.push(7, this.sty || 'Arial');
-            if (H.includes(this.hAlign, 1) || V.includes(this.vAlign, 1)) {
-              m.push(72, Math.max(H.indexOf(this.hAlign), 0)); m.push(11, this.x); m.push(21, this.y); m.push(31, 0);
-              m.push(100, 'AcDbText'); m.push(73, Math.max(V.indexOf(this.vAlign), 0));
-            } else m.push(100, 'AcDbText');
-          };
-          pr.__txt = true;
-        }
-      } else if (!pr.__cor) {
-        const orig = pr.tags;
-        pr.tags = function (m) {
-          const self = this, mp = Object.create(m);
-          mp.push = function (c, v) { m.push(c, v); if (c === 8 && self.aci != null) m.push(62, self.aci); };
-          return orig.call(this, mp);
-        };
-        pr.__cor = true;
-      }
-      return P;
-    };
+  // ---------- caneta: registra operações de desenho (com o deslocamento da prancha, layer, cor explícita, estilo e escala de cota) ----------
+  function caneta(ops, ox, oy) {
     const P = {
-      cur: '0', aci: null, sty: 'Arial',
-      L(nome) { d.setActiveLayer(nome); P.cur = nome; return P; },
+      cur: '0', aci: null, sty: 'Arial', esc: null,
+      L(nome) { P.cur = nome; return P; },
       C(a) { P.aci = a == null ? null : a; return P; },      // cor explícita (ACI); null = por layer
       S(n) { P.sty = n || 'Arial'; return P; },
-      ln(x1, y1, x2, y2) { d.drawLine(ox + x1, oy + y1, ox + x2, oy + y2); return fim(); },
-      pl(pts, fechada, w0, w1) { d.drawPolyline(pts.map(p => [ox + p[0], oy + p[1]]), !!fechada, w0 || 0, w1 === undefined ? (w0 || 0) : w1); return fim(); },
-      ci(x, y, r) { d.drawCircle(ox + x, oy + y, r); return fim(); },
-      tx(x, y, h, s, al, v, rot) { d.drawText(ox + x, oy + y, h, rot || 0, String(s), al || 'left', v || 'baseline'); return fim(); },
+      E(e) { P.esc = e || null; return P; },                 // escala (1:n) das cotas seguintes; null = texto fixo
+      ln(x1, y1, x2, y2) { ops.push({ k: 'ln', l: P.cur, c: P.aci, p: [ox + x1, oy + y1, ox + x2, oy + y2] }); return P; },
+      pl(pts, fechada, w0, w1) { ops.push({ k: 'pl', l: P.cur, c: P.aci, p: pts.map(q => [ox + q[0], oy + q[1]]), f: !!fechada, w: [w0 || 0, w1 === undefined ? (w0 || 0) : w1] }); return P; },
+      ci(x, y, r) { ops.push({ k: 'ci', l: P.cur, c: P.aci, p: [ox + x, oy + y, r] }); return P; },
+      tx(x, y, h, s, al, v, rot) { ops.push({ k: 'tx', l: P.cur, c: P.aci, s: P.sty, p: [ox + x, oy + y, h, String(s), al || 'left', v || 'baseline', rot || 0] }); return P; },
       rect(x1, y1, x2, y2) { return P.pl([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], true); },
-      arco(cx, cy, r, a0, a1, n) { const p = []; n = n || 24; for (let i = 0; i <= n; i++) { const a = rad(a0 + (a1 - a0) * i / n); p.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]); } return P.pl(p, false); },
+      ht(x1, y1, x2, y2, sc) { ops.push({ k: 'ht', l: 'ARX-GR-Hachuras', p: [ox + x1, oy + y1, ox + x2, oy + y2], sc }); return P; },
+      dimL(p1, p2, base, ang, txt, h) { ops.push({ k: 'dl', esc: P.esc, p1: [ox + p1[0], oy + p1[1]], p2: [ox + p2[0], oy + p2[1]], base: [ox + base[0], oy + base[1]], ang, txt, h }); return P; },
+      dimA(p1, p2, dist, txt, h) { ops.push({ k: 'dal', esc: P.esc, p1: [ox + p1[0], oy + p1[1]], p2: [ox + p2[0], oy + p2[1]], dist, txt, h }); return P; },
+      dimAng(c, p1, p2, base, txt, h) { ops.push({ k: 'dang', esc: P.esc, c: [ox + c[0], oy + c[1]], p1: [ox + p1[0], oy + p1[1]], p2: [ox + p2[0], oy + p2[1]], base: [ox + base[0], oy + base[1]], txt, h }); return P; },
+      ml(alvo, ins, linhas, h, dir) { ops.push({ k: 'ml', alvo: [ox + alvo[0], oy + alvo[1]], ins: [ox + ins[0], oy + ins[1]], linhas, h, dir }); return P; },
+      ins(blk, x, y, at, sc, rot) { ops.push({ k: 'ins', blk, l: P.cur, p: [ox + x, oy + y], at: at || {}, sc: sc || 1, rot: rot || 0 }); return P; },
     };
     return P;
   }
 
-  // ---------- cotas: linhas e setas vermelhas (ARX-GR-Cota), texto branco (ARX-GR-Texto), como o estilo "Cota 80" ----------
-  function seta(P, x, y, dx, dy) {                            // seta cheia de 2,2 mm; (dx,dy) aponta para dentro da cota
+  // ---------- cotas (DIMENSION): o valor é medido na geometria; o texto só é fixo quando o desenho não está em escala ----------
+  function seta(P, x, y, dx, dy) {                            // seta cheia de 2,2 mm (só nos detalhes sem escala); (dx,dy) aponta para dentro
     P.pl([[x + dx * 2.2, y + dy * 2.2], [x, y]], false, 0.9, 0);
   }
-  function cotaH(P, x1, x2, y, ye, txt, h) {                  // cota horizontal em y; extensões vão até ye
-    h = h || 2.0; const s = Math.sign(y - ye) || 1, prev = P.cur, sg = Math.sign(x2 - x1) || 1;
-    P.L('ARX-GR-Cota').ln(x1, ye, x1, y + s * 1.2).ln(x2, ye, x2, y + s * 1.2).ln(x1, y, x2, y);
-    seta(P, x1, y, sg, 0); seta(P, x2, y, -sg, 0);
-    if (txt !== '') P.L('ARX-GR-Texto').tx((x1 + x2) / 2, y + 0.9, h, txt, 'center', 'baseline');
-    P.L(prev);
-  }
-  function cotaV(P, x, y1, y2, xe, txt, h) {                  // cota vertical em x; extensões vão até xe
-    h = h || 2.0; const s = Math.sign(x - xe) || 1, prev = P.cur, sg = Math.sign(y2 - y1) || 1;
-    P.L('ARX-GR-Cota').ln(xe, y1, x + s * 1.2, y1).ln(xe, y2, x + s * 1.2, y2).ln(x, y1, x, y2);
-    seta(P, x, y1, 0, sg); seta(P, x, y2, 0, -sg);
-    if (txt !== '') P.L('ARX-GR-Texto').tx(x - 0.9, (y1 + y2) / 2, h, txt, 'center', 'baseline', 90);
-    P.L(prev);
-  }
-  function cotaDiag(P, x1, y1, x2, y2, off, txt, h) {         // cota paralela à reta (x1,y1)-(x2,y2), deslocada de off (lado esquerdo se > 0)
-    h = h || 2.0; const prev = P.cur, L = Math.hypot(x2 - x1, y2 - y1), ux = (x2 - x1) / L, uy = (y2 - y1) / L, nx = -uy, ny = ux;
-    const a = [x1 + nx * off, y1 + ny * off], b = [x2 + nx * off, y2 + ny * off], e = Math.sign(off) * 1.2;
-    P.L('ARX-GR-Cota').ln(x1, y1, a[0] + nx * e, a[1] + ny * e).ln(x2, y2, b[0] + nx * e, b[1] + ny * e).ln(a[0], a[1], b[0], b[1]);
-    seta(P, a[0], a[1], ux, uy); seta(P, b[0], b[1], -ux, -uy);
-    let ang = deg(Math.atan2(uy, ux)); if (ang > 90 || ang < -90) ang += 180;
-    P.L('ARX-GR-Texto').tx((a[0] + b[0]) / 2 + nx * 0.9 * Math.sign(off), (a[1] + b[1]) / 2 + ny * 0.9 * Math.sign(off), h, txt, 'center', 'baseline', ang);
-    P.L(prev);
-  }
-  // chamada: linha vermelha até um traço horizontal sob o texto (como as multilinhas do modelo); linhas extras vão abaixo do traço
-  function chamada(P, x1, y1, x2, y2, txt, h) {
-    h = h || 2.0; const prev = P.cur, ls = Array.isArray(txt) ? txt : [txt], dir = x2 >= x1 ? 1 : -1;
-    const larg = Math.max(...ls.map(t => String(t).length)) * h * 0.56 + 1.5;
-    P.L('ARX-GR-Cota').ln(x1, y1, x2, y2).ln(x2, y2, x2 + dir * larg, y2);
-    P.L('ARX-GR-Texto');
-    ls.forEach((t, k) => P.tx(x2 + dir * 0.8, k === 0 ? y2 + 0.9 : y2 - 0.9 - (k - 1) * (h + 0.8), h, t, dir > 0 ? 'left' : 'right', k === 0 ? 'baseline' : 'top'));
-    P.L(prev);
-  }
-  // símbolo de título de vista (bloco "Subtítulo" do modelo): círculo azul, traços, sublinhado azul e textos
-  function tituloVista(P, x, y, l1, l2, l3, esc) {
-    const prev = P.cur; esc = esc || 1;
-    P.L('ARX-GR-Simbolo').C(5).ci(x, y, 4.5 * esc).ln(x + 4.5 * esc, y, x + 50.78 * esc, y).ln(x, y - 4.5 * esc, x, y - 6.5 * esc).ln(x, y + 6.5 * esc, x, y + 4.5 * esc).ln(x - 4.5 * esc, y, x - 6.5 * esc, y).C(null);
-    P.L('ARX-GR-Simbolo').tx(x + 6.05 * esc, y + 1.47 * esc, 4.5 * esc, l1, 'left', 'baseline');
-    if (l3 === undefined) { if (l2) P.tx(x + 6.26 * esc, y - 3.81 * esc, 2.5 * esc, l2, 'left', 'baseline'); }
-    else { P.tx(x + 6.05 * esc, y - 4.33 * esc, 3.0 * esc, l2, 'left', 'baseline'); P.tx(x + 6.05 * esc, y - 8.79 * esc, 2.3 * esc, l3, 'left', 'baseline'); }
-    P.L(prev);
-  }
-  // marca de corte (triângulo azul com a letra), apontando para (dx,dy)
-  function marcaCorte(P, x, y, letra, dx, dy) {
-    const prev = P.cur, nx = -dy, ny = dx, a = 7, b = 5;
-    P.L('ARX-GR-Simbolo').C(5).pl([[x, y], [x - dx * a + nx * b, y - dy * a + ny * b], [x - dx * a - nx * b, y - dy * a - ny * b]], true, 0.6, 0.6).C(null);
-    P.tx(x - dx * 4.2, y - dy * 4.2 - 1.2, 2.6, letra, 'center', 'baseline');
-    P.L(prev);
-  }
-
-  // ---------- faixa de solo hachurada ----------
-  function hachuraSolo(P, xa, xb, yb, yt, passo, dentro) {   // dentro(x,y) => true se estiver no concreto
-    P.L('ARX-GR-Hachuras');
-    const step = 0.5;
-    for (let c = yb - xb; c <= yt - xa; c += passo * Math.SQRT2) {
-      const x0 = Math.max(xa, yb - c), x1 = Math.min(xb, yt - c);
-      if (x1 - x0 < 0.3) continue;
-      let ini = null;
-      for (let x = x0; x <= x1 + 1e-6; x += step) {
-        const fora = !dentro(x, x + c);
-        if (fora && ini === null) ini = x;
-        if ((!fora || x + step > x1) && ini !== null) {
-          const fim = fora ? x1 : x - step;
-          if (fim - ini > 0.4) P.ln(ini, ini + c, fim, fim + c);
-          ini = null;
-        }
+  // texto da cota: se o número do texto for igual ao valor medido (em cm reais), vira <> (medição automática)
+  function textoCota(P, txt, med) {
+    if (txt === undefined) return '<>';
+    if (txt === '') return ' ';
+    if (P.esc) {
+      const real = med * P.esc / 10, m = /(\d[\d.,]*)(?!.*\d)/.exec(txt);
+      if (m) {
+        const n = parseFloat(m[1].replace(/\./g, '').replace(',', '.'));
+        if (isFinite(n) && Math.abs(n - real) <= Math.max(0.6, real * 0.006)) return txt.slice(0, m.index) + '<>' + txt.slice(m.index + m[1].length);
       }
     }
+    return txt;
   }
+  function cotaH(P, x1, x2, y, ye, txt, h) {                  // cota horizontal em y; extensões vão até ye
+    P.dimL([x1, ye], [x2, ye], [(x1 + x2) / 2, y], 0, textoCota(P, txt, Math.abs(x2 - x1)), h || 2.0);
+  }
+  function cotaV(P, x, y1, y2, xe, txt, h) {                  // cota vertical em x; extensões vão até xe
+    P.dimL([xe, y1], [xe, y2], [x, (y1 + y2) / 2], 90, textoCota(P, txt, Math.abs(y2 - y1)), h || 2.0);
+  }
+  function cotaDiag(P, x1, y1, x2, y2, off, txt, h) {         // cota paralela à reta (x1,y1)-(x2,y2), deslocada de off (lado esquerdo se > 0)
+    P.dimA([x1, y1], [x2, y2], off, textoCota(P, txt, Math.hypot(x2 - x1, y2 - y1)), h || 2.0);
+  }
+  function cotaAng(P, cx, cy, a0, a1, rAnel, txt, h, rExt) {  // cota angular de a0 a a1 (graus, anti-horário), com a linha de cota no raio rAnel
+    const r0 = rExt || Math.max(rAnel - 8, 3), am = rad((a0 + a1) / 2);
+    P.dimAng([cx, cy], [cx + r0 * Math.cos(rad(a0)), cy + r0 * Math.sin(rad(a0))], [cx + r0 * Math.cos(rad(a1)), cy + r0 * Math.sin(rad(a1))],
+      [cx + rAnel * Math.cos(am), cy + rAnel * Math.sin(am)], txt, h || 1.6);
+  }
+  // chamada (MULTILEADER): linha até o texto, com patamar horizontal; linhas extras ficam abaixo
+  function chamada(P, x1, y1, x2, y2, txt, h) {
+    const ls = Array.isArray(txt) ? txt : [txt], dir = x2 >= x1 ? 1 : -1;
+    P.ml([x1, y1], [x2 + dir * 2.6, y2], ls, h || 2.0, dir);
+  }
+  // símbolo de título de vista (bloco "Subtitulo" com atributos): círculo azul, traços, sublinhado e textos
+  function tituloVista(P, x, y, l1, l2, l3, esc) {
+    const prev = P.cur; esc = esc || 1;
+    P.L('ARX-GR-Simbolo');
+    if (l3 === undefined) P.ins('Subtitulo', x, y, { SUBTIT: l1, ESC: l2 || ' ' }, esc);
+    else P.ins('Subtitulo3', x, y, { SUBTIT: l1, SUBTIT2: l2, ESCB: l3 }, esc);
+    P.L(prev);
+  }
+  // marca de corte (bloco "Corte" com a letra como atributo), apontando para (dx,dy)
+  function marcaCorte(P, x, y, letra, dx, dy) {
+    const prev = P.cur; P.L('ARX-GR-Simbolo').ins('Corte', x, y, { LETRA: letra }, 1, deg(Math.atan2(dy, dx))); P.L(prev);
+  }
+
+  // ---------- hachura (HATCH) de um retângulo; o 'passo' define a escala do padrão ANSI31 ----------
+  function hachuraSolo(P, xa, xb, yb, yt, passo) { P.ht(xa, yb, xb, yt, passo / 2.2); }
 
   // ---------- seção em L do stub (cantoneira) ----------
   function cantoneira(P, cx, cy, aba, esp, giro) {
@@ -205,16 +153,8 @@
 
 
   function desenharCarimbo(P, papeis) {
-    const prev = P.cur; P.L('FORMATO');
-    CARIMBO.p.forEach(p => P.C(p[1] === 7 ? null : p[1]).pl(p[0], true));
-    CARIMBO.l.forEach(l => P.C(l[4] === 7 ? null : l[4]).ln(l[0], l[1], l[2], l[3]));
-    const H = { l: 'left', c: 'center', r: 'right' }, V = { b: 'baseline', m: 'middle', t: 'top' };
-    CARIMBO.t.forEach(t => {
-      let s = t[3]; if (t[7] && t[7] !== '?') s = papeis[t[7]] !== undefined ? papeis[t[7]] : ''; else if (s === '{folha}') s = papeis.folha;
-      if (s === '') return;
-      P.S(t[6]).C(t[5] === 7 ? null : t[5]).tx(t[0], t[1], t[2], s, H[t[4][0]], V[t[4][1]]);
-    });
-    P.C(null).S('Arial').L(prev);
+    const at = {}; Object.keys(papeis).forEach(k => { at[k.toUpperCase()] = String(papeis[k]); });
+    const prev = P.cur; P.L('FORMATO').ins('A1 ELETROBRAS', 0, 0, at); P.L(prev);
   }
   // bloco de texto corrido (referências e notas), cor e estilo do modelo
   function blocoTexto(P, x, yTopo, h, linhas, passo, aci, estilo) {
@@ -364,6 +304,7 @@
     };
 
     const corte = (xc, o) => {
+      P.E(escCorte);
       const r = D * kc / 2, rb = Db * kc / 2, xm = xc + o.dist * kc;
       // solo: faixas hachuradas junto ao fuste e no marco central
       const faixa = (xa, xb) => { P.L('ARX-GR-Solo').ln(xa, yt, xb, yt); hachuraSolo(P, Math.min(xa, xb), Math.max(xa, xb), yt - 3.5, yt, 1.3, () => false); };
@@ -377,8 +318,7 @@
         const pts = []; for (let k = 0; k <= 20; k++) pts.push(bez(p0, [p0[0] - 6, p0[1] + 16], [x0 - 10, ytop + 20], [x0 + 1.5, ytop - slope - 3], k / 20));
         for (let k = 1; k <= 12; k++) pts.push(bez([x0 + 1.5, ytop - slope - 3], [x0 - 4, ytop - slope - 12], [x0 + 3, yTub + 10], [x0, yTub + 1.5], k / 12));
         P.L('ARX-GR-LAuxiliar').pl(pts, false, 0.25).pl([[x0, yTub], [x0 - 24, yTub]], false, 0.8);
-        cotaV(P, x0 - 30, yt, yTub, x0 - 24, '', 1.8);
-        P.L('ARX-GR-Texto').tx(x0 - 32, (yt + yTub) / 2, 1.7, ['ATERRAMENTO'], 'center', 'baseline', 90).tx(x0 - 35, (yt + yTub) / 2, 1.7, '(VER REFERÊNCIA 3)', 'center', 'baseline', 90);
+        cotaV(P, x0 - 30, yt, yTub, x0 - 24, 'ATERRAMENTO (VER REFERÊNCIA 3)', 1.7);
         chamada(P, x0 - 12, yTub - 1, x0 - 14, Math.max(yTub - 18, (qb ? yUpBot : yb) + 2), ['TUBO PLÁSTICO DE Ø3/4"', 'PARA FIO CONTRAPESO'], 1.9);
         chamada(P, xc + (sb.pOut[0] - xc) * 0.35 + 3, ytop + (sb.pOut[1] - ytop) * 0.35, xc + r + 24, ytop + (sb.pOut[1] - ytop) * 0.2 - 4, ['DETALHES DO STUB', '(VER REFERÊNCIA 2)'], 1.9);
       }
@@ -397,9 +337,8 @@
         cotaV(P, xc - r - 9, yt, ytop, xc - r, 'G = VAR.', 1.8);
         cotaV(P, xe - 9, yb, yt, xe, cm(Lenc * 100), 1.8); quebraDim(xe - 9);
         cotaV(P, xe - 20, yb, ytop, xe, 'H = VAR. (VER TABELA 2)', 1.8); quebraDim(xe - 20);
-        cotaV(P, xc - r - 3.5, ytop - slope, ytop, xc - r, '', 1.6);
+        cotaV(P, xc - r - 5, ytop - slope, ytop, xc - r, '5', 1.6);
         chamada(P, xc - r, ytop - slope, xc - r - 24, ytop + 14, ['NÍVEL SUPERIOR DO', 'CONCRETO'], 1.9);
-        P.L('ARX-GR-Texto').tx(xc - r - 5.5, ytop - slope / 2, 1.6, '5', 'right', 'middle');
         cotaH(P, xc - rb, xc + rb, yb - 7, yb, comBase ? 'Db = ' + cm(Db * 100) : cm(D * 100), 1.9);
         if (comBase) cotaH(P, xc - r, xc + r, yb + Lb * kc + (La * kc) + 5, yb + (Lb + La) * kc, 'D = ' + cm(D * 100), 1.7);
         chamada(P, sb.hole[0], sb.hole[1], xc + r + 14, yRef + 5, ['FUROS PARA', 'ATERRAMENTO'], 1.9);
@@ -424,6 +363,7 @@
 
     // ---------------- ARMADURA: contorno vermelho, gaiola verde e stub ----------------
     {
+      P.E(escCorte);
       const xc = 580, r = D * kc / 2;
       contorno(xc, 'ARX-CV-Contorno'); armaduraCorte(xc);
       const sb = desenhaStub(xc, aTrans);
@@ -451,6 +391,7 @@
     // ---------------- SEÇÃO B (corte com a armadura transversal) e anel do N2 ----------------
     {
       const esc = menorEscala(D * 1000, D * 1000, 56, 56), k = 1000 / esc, cx = 540, cy = 292, hD = D * k / 2;
+      P.E(esc);
       const rotB1 = nBar + ' N1 Ø' + fmt(X.phi1, 1) + ' c/' + cm(X.esp1);
       if (S) {
         P.L('ARX-GR-LContínua').rect(cx - hD, cy - hD, cx + hD, cy + hD);
@@ -466,11 +407,7 @@
         P.L('ARX-CV-Contorno').ci(cx, cy, hD);
         P.L('ARX-CV-Armadura').ci(cx, cy, rN2 * k);
         for (let b = 0; b < nBar; b++) { const a = 2 * Math.PI * b / nBar; P.ci(cx + rN1 * k * Math.cos(a), cy + rN1 * k * Math.sin(a), Math.max(phi1 * k / 2, 0.45)); }
-        const a1 = rad(62), a2 = a1 + 2 * Math.PI / nBar, am = (a1 + a2) / 2, Ra = hD + 7, arc = [];
-        P.L('ARX-GR-Cota').ln(cx + rN1 * k * Math.cos(a1), cy + rN1 * k * Math.sin(a1), cx + (Ra + 2) * Math.cos(a1), cy + (Ra + 2) * Math.sin(a1)).ln(cx + rN1 * k * Math.cos(a2), cy + rN1 * k * Math.sin(a2), cx + (Ra + 2) * Math.cos(a2), cy + (Ra + 2) * Math.sin(a2));
-        for (let q = 0; q <= 10; q++) { const a = a1 + (a2 - a1) * q / 10; arc.push([cx + Ra * Math.cos(a), cy + Ra * Math.sin(a)]); }
-        P.pl(arc, false);
-        P.L('ARX-GR-Texto').tx(cx + (Ra + 3.5) * Math.cos(am), cy + (Ra + 3.5) * Math.sin(am), 1.8, fmt(360 / nBar, 1) + '°', 'left', 'baseline');
+        cotaAng(P, cx, cy, 62, 62 + 360 / nBar, hD + 7, '<>', 1.7, rN1 * k);
       }
       cantoneira(P, cx, cy, aba * k, espStub * k, 180);
       P.L('ARX-GR-LCentro').ln(cx - hD - 8, cy, cx + hD + 8, cy).ln(cx, cy - hD - 8, cx, cy + hD + 8);
@@ -480,6 +417,7 @@
       tituloVista(P, 478.9, 241.1, 'SEÇÃO B', 'ESC. 1:' + esc);
       // anel do estribo N2, com o transpasse indicado
       const dN2 = D - 2 * cob - phi2, escN = menorEscala(dN2 * 1000, dN2 * 1000, 50, 50), kN = 1000 / escN, cx2 = 440, cy2 = 290, r2 = dN2 * kN / 2;
+      P.E(escN);
       P.L('ARX-CV-Armadura');
       let perim;
       if (S) { P.rect(cx2 - r2, cy2 - r2, cx2 + r2, cy2 + r2); perim = 4 * dN2 * 100; }
@@ -495,6 +433,7 @@
 
     // ---------------- DETALHE 1 (emenda por transpasse, posição N1; sem escala) ----------------
     {
+      P.E(null);                                                     // detalhe sem escala: as cotas têm o texto fixo
       const wb = 4.4, xA = 350, xB = xA + wb, y0 = 272, lenB = 40, lenA = 40, trP = 22;
       const yA0 = y0 + lenB - trP, yA1 = yA0 + lenA, yB0 = y0, yB1 = y0 + lenB;
       P.L('ARX-CV-Armadura').rect(xB, yB0, xB + wb, yB1).rect(xA, yA0, xA + wb, yA1);
@@ -510,6 +449,7 @@
 
     // ---------------- PLANTA (locação de um pé em relação ao marco central; Seção A é o corte na diagonal) ----------------
     {
+      P.E(escCorte);
       const esc = escCorte, k = kc, Fx = 116, Fy = 262, xM = Fx + dxM * k, yM = Fy + dyM * k;   // mesma escala e mesmos eixos da elevação
       const r = D * k / 2, rb = Db * k / 2, L = Math.hypot(xM - Fx, yM - Fy), ux = (xM - Fx) / L, uy = (yM - Fy) / L;
       P.L('ARX-GR-LCentro');
@@ -529,12 +469,12 @@
       P.L('ARX-GR-LTracejada').C(1).ln(xM, yM + 6, xM, yM - Lr).C(null);
       P.L('ARX-GR-Texto').tx(xM - 2.2, yM - Lr + 2, 1.8, 'BISSETRIZ DO ÂNGULO DA LINHA', 'left', 'baseline', 90).tx(xM + 4.5, yM - Lr + 2, 1.8, 'DIRETRIZ DA LT', 'left', 'baseline', 90);
       const aD = deg(Math.atan2(dyM, dxM));                       // ângulos da diagonal com os eixos (45° quando a base é quadrada)
-      P.L('ARX-GR-Cota').arco(xM, yM, 22, 180, 180 + aD, 10).arco(xM, yM, 28, 180 + aD, 270, 10);
-      P.L('ARX-GR-Texto').tx(xM + 25 * Math.cos(rad(180 + aD / 2)) - 2, yM + 25 * Math.sin(rad(180 + aD / 2)) + 1, 1.5, fmt(aD, 1) + '°', 'right', 'baseline').tx(xM + 31 * Math.cos(rad(180 + aD + (90 - aD) / 2)) - 1, yM + 31 * Math.sin(rad(180 + aD + (90 - aD) / 2)) - 3, 1.5, fmt(90 - aD, 1) + '°', 'right', 'baseline');
+      cotaAng(P, xM, yM, 180, 180 + aD, 22, '<>', 1.5);
+      cotaAng(P, xM, yM, 180 + aD, 270, 28, '<>', 1.5);
       if (dl > 0) {
-        P.L('ARX-GR-Cota').arco(xM, yM, 34, -90 - dl / 2, -90 + dl / 2, 12).arco(xM, yM, 44, -90, -90 + dl / 2, 8);
+        cotaAng(P, xM, yM, -90 - dl / 2, -90 + dl / 2, 34, 'β = <>', 1.7);
+        cotaAng(P, xM, yM, -90, -90 + dl / 2, 44, 'β/2 = <>', 1.5);
         chamada(P, xM + 34 * Math.cos(rad(-90 + dl / 2)), yM + 34 * Math.sin(rad(-90 + dl / 2)), xM + 22, yM - 60, 'ÂNGULO DA LT', 1.8);
-        P.L('ARX-GR-Texto').tx(xM, yM - 49, 1.8, 'β = ' + fmt(dl, 1) + '°', 'center', 'baseline').tx(xM + 3, yM - 44, 1.6, 'β/2', 'left', 'baseline');
       } else P.L('ARX-GR-Texto').tx(xM + 6, yM + 3, 1.7, 'β = 0° (SEM DEFLEXÃO)', 'left', 'baseline');
       // cotas: A na horizontal e na vertical, D na diagonal, e as projeções do stub
       const ph = vis * Math.sin(aTrans) * 100, pv = vis * Math.sin(aLong) * 100, pd = vis * Math.sin(beta) * 100;
@@ -551,6 +491,7 @@
     // ---------------- LOCAÇÃO DAS FUNDAÇÕES ----------------
     {
       const esc = menorEscala((bt + Db + 1.5) * 1000, (bl + Db + 1.5) * 1000, 100, 110), k = 1000 / esc, cx = 132, cy = 108;
+      P.E(esc);
       const pes = [['A', -1, 1], ['B', 1, 1], ['C', 1, -1], ['D', -1, -1]], rb = Db * k / 2, r = D * k / 2;
       P.L('ARX-GR-LCentro');
       [-1, 1].forEach(s => { P.ln(cx + s * bt / 2 * k, cy - bl / 2 * k - rb - 8, cx + s * bt / 2 * k, cy + bl / 2 * k + rb + 8); P.ln(cx - bt / 2 * k - rb - 8, cy + s * bl / 2 * k, cx + bt / 2 * k + rb + 8, cy + s * bl / 2 * k); });
@@ -570,7 +511,7 @@
       P.L('ARX-GR-LTracejada').C(1).ln(cx, cy - Lr * 0.4, cx, cy + Lr).C(null);
       [b2, -b2].forEach(a => P.L('ARX-GR-LContínua').C(2).ln(cx - Math.sin(a) * Lr * 0.4, cy - Math.cos(a) * Lr * 0.4, cx + Math.sin(a) * Lr, cy + Math.cos(a) * Lr).C(null));
       P.L('ARX-GR-Texto').tx(cx - 2, cy + Lr * 0.45, 1.6, 'BISSETRIZ DO ÂNGULO DA LINHA', 'left', 'baseline', 90).tx(cx + 3.5, cy + Lr * 0.45, 1.6, 'DIRETRIZ DA LT', 'left', 'baseline', 90);
-      if (dl > 0) { P.L('ARX-GR-Cota').arco(cx, cy, Lr * 0.9, 90 - dl / 2, 90 + dl / 2, 8); P.L('ARX-GR-Texto').tx(cx, cy + Lr * 0.9 + 1.5, 1.7, 'β', 'center', 'baseline'); }
+      if (dl > 0) cotaAng(P, cx, cy, 90 - dl / 2, 90 + dl / 2, Lr * 0.9, 'β = <>', 1.7);
       cotaV(P, cx - bt / 2 * k - rb - 12, cy, cy + bl / 2 * k, cx - bt / 2 * k, 'A = ' + cm(dyM * 100), 1.7);
       cotaV(P, cx - bt / 2 * k - rb - 12, cy - bl / 2 * k, cy, cx - bt / 2 * k, 'A = ' + cm(dyM * 100), 1.7);
       cotaH(P, cx - bt / 2 * k, cx, cy - bl / 2 * k - rb - 11, cy - bl / 2 * k, 'A = ' + cm(dxM * 100), 1.7);
@@ -630,20 +571,19 @@
     P.L('ARX-GR-Texto').tx(0, A1.h + 10, 6, nomeF.toUpperCase() + ' - TORRE ' + torre + ' - SOLO ' + nome, 'left', 'baseline');
   }
 
-  window.DxfFundacao = function (run, doc, geom) {
-    if (!window.DxfWriter) throw new Error('modelo/dxf-writer.js não carregado');
+  // rodarPy(json) -> Promise<{ out | erro }>: executa o motor Python 'dxf' (ezdxf) no navegador
+  window.DxfFundacao = async function (run, doc, geom, rodarPy) {
     const ent = run.entrada, res = run.res, TB = run.ft === 'tcb', S = run.ft === 'sap';
-    const d = new window.DxfWriter.Drawing();
-    d.setUnits('Millimeters');
-    d.addLineType('ACAD_ISO04W100', 'ISO long-dash dot', [12, -3, 0, -3]);
-    d.addLineType('ACAD_ISO02W100', 'ISO dash', [12, -3]);
-    LAYERS.forEach(l => d.addLayer(l[0], l[1], l[2]));
-    ESTILOS.forEach(e => { const ts = new window.DxfWriter.TextStyle(e[0]); ts.fontFileName = e[1]; d.tables['STYLE'].add(ts); });
     const solos = res.solos.filter(n => res.resultados[n]);
     if (!solos.length) throw new Error('Nenhum solo calculado para desenhar.');
     const ctx = { run, ent, res, doc: doc || {}, geom: Object.assign({}, GEOM_PADRAO, geom || {}), S, TB, torre: run.torreNome, tipo: ent.tipo_fundacao, nomeF: run.tipo || (S ? 'Sapata' : TB ? 'Tubulão com base' : 'Tubulão sem base'), nSolos: solos.length };
-    for (let i = 0; i < solos.length; i++) prancha(d, i, ctx);
-    return d.toDxfString();
+    const ops = [];
+    for (let i = 0; i < solos.length; i++) prancha(ops, i, ctx);
+    const r = await rodarPy(JSON.stringify({ ops, carimbo: CARIMBO }));
+    if (r.erro) throw new Error(String(r.erro).split('\n').filter(Boolean).slice(-1)[0]);
+    const o = JSON.parse(r.out);
+    if (o.avisos && o.avisos.length && window.console) console.warn('DXF:', o.avisos);
+    return o.dxf;
   };
   window.DxfFundacao.GEOM_PADRAO = GEOM_PADRAO;
 })();

@@ -1,5 +1,5 @@
-"""Copia os motores de motor/*.py, o relatório modelo/relatorio.js e o gerador de DXF
-(modelo/dxf-writer.js + modelo/dxf.js) para dentro do index.html.
+"""Copia os motores de motor/*.py (inclusive o do desenho DXF), o relatório modelo/relatorio.js e o
+gerador de DXF modelo/dxf.js para dentro do index.html.
 
 O site busca primeiro motor/<arquivo>.py (quando está publicado ou servido
 por um servidor local); se não conseguir (por exemplo, index.html aberto
@@ -18,6 +18,7 @@ MOTORES = {
     "tubulao_sem_base.py": "MOTOR_TUBULAO_SEM_BASE",
     "tubulao_com_base.py": "MOTOR_TUBULAO_COM_BASE",
     "sapata.py": "MOTOR_SAPATA",
+    "desenho_dxf.py": "MOTOR_DESENHO_DXF",
 }
 
 
@@ -41,15 +42,12 @@ def main():
     with open(os.path.join(RAIZ, "modelo", "relatorio.js"), encoding="utf-8") as f:
         manifesto[chave]["data"] = base64.b64encode(gzip.compress(f.read().encode("utf-8"), mtime=0)).decode()
     print(f"relatorio.js -> {chave}")
-    # desenhos em DXF: a biblioteca de escrita e o gerador viram um único script
+    # desenhos em DXF: o gerador em JavaScript (a geração do arquivo fica no motor Python, com a ezdxf)
     chave = next(k for k, v in manifesto.items() if v["mime"].endswith("javascript")
-                 and gzip.decompress(base64.b64decode(v["data"])).startswith("// dxf-writer".encode()))
-    partes = []
-    for arq in ("dxf-writer.js", "dxf.js"):
-        with open(os.path.join(RAIZ, "modelo", arq), encoding="utf-8") as f:
-            partes.append(f.read())
-    manifesto[chave]["data"] = base64.b64encode(gzip.compress("\n".join(partes).encode("utf-8"), mtime=0)).decode()
-    print(f"dxf-writer.js + dxf.js -> {chave}")
+                 and gzip.decompress(base64.b64decode(v["data"])).startswith(("// dxf-writer".encode(), "// Desenhos de fundação".encode())))
+    with open(os.path.join(RAIZ, "modelo", "dxf.js"), encoding="utf-8") as f:
+        manifesto[chave]["data"] = base64.b64encode(gzip.compress(f.read().encode("utf-8"), mtime=0)).decode()
+    print(f"dxf.js -> {chave}")
     linhas[i] = json.dumps(manifesto)
     with open(caminho, "w", encoding="utf-8") as f:
         f.write("\n".join(linhas))
