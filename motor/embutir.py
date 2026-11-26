@@ -1,4 +1,5 @@
-"""Copia os motores de motor/*.py e o relatório modelo/relatorio.js para dentro do index.html.
+"""Copia os motores de motor/*.py, o relatório modelo/relatorio.js e o gerador de DXF
+(modelo/dxf-writer.js + modelo/dxf.js) para dentro do index.html.
 
 O site busca primeiro motor/<arquivo>.py (quando está publicado ou servido
 por um servidor local); se não conseguir (por exemplo, index.html aberto
@@ -40,6 +41,15 @@ def main():
     with open(os.path.join(RAIZ, "modelo", "relatorio.js"), encoding="utf-8") as f:
         manifesto[chave]["data"] = base64.b64encode(gzip.compress(f.read().encode("utf-8"), mtime=0)).decode()
     print(f"relatorio.js -> {chave}")
+    # desenhos em DXF: a biblioteca de escrita e o gerador viram um único script
+    chave = next(k for k, v in manifesto.items() if v["mime"].endswith("javascript")
+                 and gzip.decompress(base64.b64decode(v["data"])).startswith("// dxf-writer".encode()))
+    partes = []
+    for arq in ("dxf-writer.js", "dxf.js"):
+        with open(os.path.join(RAIZ, "modelo", arq), encoding="utf-8") as f:
+            partes.append(f.read())
+    manifesto[chave]["data"] = base64.b64encode(gzip.compress("\n".join(partes).encode("utf-8"), mtime=0)).decode()
+    print(f"dxf-writer.js + dxf.js -> {chave}")
     linhas[i] = json.dumps(manifesto)
     with open(caminho, "w", encoding="utf-8") as f:
         f.write("\n".join(linhas))
