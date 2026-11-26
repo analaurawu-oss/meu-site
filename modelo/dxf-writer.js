@@ -1613,5 +1613,5 @@ class Viewport extends DatabaseObject {
 module.exports = Viewport;
 
   };
-  window.DxfWriter={Drawing:req("./Drawing")};
+  window.DxfWriter={Drawing:req("./Drawing"),TextStyle:req("./TextStyle")};
 })();
