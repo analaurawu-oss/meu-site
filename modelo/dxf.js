@@ -378,7 +378,7 @@
         chamada(P, xc + (sb.pOut[0] - xc) * 0.35 + 3, ytop + (sb.pOut[1] - ytop) * 0.35, xc + r + 24, ytop + (sb.pOut[1] - ytop) * 0.2 - 4, ['DETALHES DO STUB', '(VER REFERÊNCIA 2)'], 1.9);
       }
       // marco central: eixo, quadradinho no terreno e chamada
-      P.L('ARX-GR-LCentro').ln(xm, yb - 6, xm, yRef + 22);
+      if (o.tube) P.L('ARX-GR-LCentro').ln(xm, yb - 6, xm, yRef + 22);
       P.L('ARX-GR-Texto').C(null); P.rect(xm - 1.6, yt, xm + 1.6, yt + 3.2);
       chamada(P, xm + 0.5, yt + 3, xm + 8, yt + 18, ['MARCO', 'CENTRAL'], 1.9);
       // distâncias ao marco central: A (ou D, na diagonal) e, somando a projeção do stub
@@ -502,10 +502,11 @@
 
     // ---------------- PLANTA (locação de um pé em relação ao marco central; Seção A é o corte na diagonal) ----------------
     {
-      const esc = menorEscala(dxM * 1000, dyM * 1000, 125, 118), k = 1000 / esc, xM = 247, yM = 372, Fx = xM - dxM * k, Fy = yM - dyM * k;
+      const esc = escCorte, k = kc, Fx = 116, Fy = 262, xM = Fx + dxM * k, yM = Fy + dyM * k;   // mesma escala e mesmos eixos da elevação
       const r = D * k / 2, rb = Db * k / 2, L = Math.hypot(xM - Fx, yM - Fy), ux = (xM - Fx) / L, uy = (yM - Fy) / L;
       P.L('ARX-GR-LCentro');
-      P.ln(Fx - rb - 20, Fy, xM + 24, Fy).ln(Fx, Fy - rb - 22, Fx, yM + 26).ln(xM, Fy - rb - 22, xM, yM + 40).ln(Fx - 10, yM, xM + 24, yM);
+      const yEixo = cA.yRef + 22;                       // os eixos do tubulão e do marco central sobem da planta até a elevação
+      P.ln(Fx - rb - 20, Fy, xM + 24, Fy).ln(Fx, Fy - rb - 22, Fx, yEixo).ln(xM, Fy - rb - 22, xM, yEixo).ln(Fx - 10, yM, xM + 24, yM);
       P.ln(Fx - ux * 40, Fy - uy * 40, xM + ux * 24, yM + uy * 24);
       marcaCorte(P, Fx - ux * 42, Fy - uy * 42, 'A', -uy, ux); marcaCorte(P, xM + ux * 26, yM + uy * 26, 'A', -uy, ux);
       if (S) { P.L('ARX-GR-LContínua').rect(Fx - rb, Fy - rb, Fx + rb, Fy + rb); P.L('ARX-GR-LTracejada').rect(Fx - r, Fy - r, Fx + r, Fy + r); }
