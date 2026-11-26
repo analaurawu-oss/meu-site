@@ -222,186 +222,208 @@
     cel(x0 + 88, 70, 87, 10, 'FINALIDADE:', doc.status);
     cel(x0, 80, 175, 9, 'DESENHO Nº DOCUMENTO:', doc.numDoc, 3);
 
-    // ---------------- ELEVAÇÃO ----------------
-    {
-      const topoReal = Lenc + Gmax + Math.max(0, hStub - enterStub) * Math.cos(thetaStub) + 0.1;
-      const esc = menorEscala(Math.max(Db, 1) * 1000 + 800, topoReal * 1000, 150, 478);
-      const k = 1000 / esc;                             // mm de papel por metro real
-      const xc = 118, yb = 62;                          // eixo e base do concreto
-      const yt = yb + Lenc * k;                         // nível do terreno
-      const ytop = yt + Gmax * k;
-      const rCon = y => {                               // meia largura do concreto na cota y (papel)
-        if (!comBase) return D * k / 2;
-        if (y < yb + Lb * k) return Db * k / 2;
-        if (y < yb + (Lb + La) * k) return (Db / 2 - (Db - D) / 2 * (y - yb - Lb * k) / (La * k)) * k;
-        return D * k / 2;
-      };
-      // terreno e hachura
-      const wLado = S ? 30 : 38, xe = xc - Db * k / 2 - wLado, xd = xc + Db * k / 2 + wLado, caixas = [];
-      P.L('ARX-GR-Solo').ln(xe - 6, yt, xd + 6, yt);
-      const rotS = [];   // legendas dentro do solo: guardadas para abrir espaço na hachura
-      if (S) {
-        const b = X.base, tN4 = 'N4 – ' + b.n + ' Ø' + fmt(b.phi, 1) + ' c/' + cm(b.esp), tN3 = 'N3 – ' + b.n + ' Ø' + fmt(b.phi, 1) + ' c/' + cm(b.esp);
-        const xt = xc + Db * k / 2 + 6;
-        rotS.push([xc + (Db / 2 - cob) * k * 0.6, yb + cob * k, xt, yb + 9, tN4], [xc + (Db / 2 - cob) * k * 0.75, yb + (Lb - cob) * k, xt, yb + Lb * k + 6, tN3]);
-        rotS.forEach(r => caixas.push([r[2] - 1, r[3] - 3, r[2] + 6 + 1.5 * r[4].length, r[3] + 3]));
-      }
-      hachuraSolo(P, xe, xd, yb - 4, yt, 3.2, (x, yy) => (yy >= yb && Math.abs(x - xc) < rCon(yy)) || caixas.some(c => x >= c[0] && x <= c[2] && yy >= c[1] && yy <= c[3]));
-      P.L('ARX-GR-Solo').ln(xe, yb - 4, xe, yt).ln(xd, yb - 4, xd, yt);
-      // concreto
-      const perfil = [];
-      if (comBase) {
-        const rb = Db * k / 2, rf = D * k / 2;
-        perfil.push([xc - rb, yb], [xc + rb, yb], [xc + rb, yb + Lb * k], [xc + rf, yb + (Lb + La) * k], [xc + rf, ytop], [xc - rf, ytop], [xc - rf, yb + (Lb + La) * k], [xc - rb, yb + Lb * k]);
-      } else {
-        const r = D * k / 2; perfil.push([xc - r, yb], [xc + r, yb], [xc + r, ytop], [xc - r, ytop]);
-      }
-      P.L('ARX-CV-Contorno').pl(perfil, true, 0.35);
-      P.L('ARX-GR-LTracejada').ln(xc - D * k / 2 - 6, yt + Gmin * k, xc + D * k / 2 + 6, yt + Gmin * k);
-      P.L('ARX-GR-LCentro').ln(xc, yb - 10, xc, ytop + hStub * k + 8);
-      // armadura do fuste: barras N1 (laterais) e estribos N2
-      const x1 = rN1 * k, x2 = rN2 * k;
-      const zFundo = yb + cob * k, zTopo = ytop - cob * k, zEstrFim = S ? yb + (Lb + La) * k : zFundo;
+    // ============ VISTAS (arranjo do modelo Autoportante: elevação, seção A, armadura, seção B, detalhe, planta, locação, tabela) ============
+    const thetaLong = thetaStub, thetaTrans = Math.acos(1 / Math.max(1, num(stub.secante_alfa_transversal, 1)));
+    const bt = num(geom.base_transversal_m, 6), bl = num(geom.base_longitudinal_m, 6), dl = num(geom.deflexao_graus, 0);
+    const dxM = bt / 2, dyM = bl / 2;                      // distâncias do eixo do pé ao marco central (transversal / longitudinal)
+    const escCorte = menorEscala(Db * 1000, (Lenc + Gmax + Math.max(0, hStub - enterStub) + 0.1) * 1000, 95, 262);
+    const kc = 1000 / escCorte;                            // mm de papel por metro real, nas vistas em corte
+    const yb = 290, yt = yb + Lenc * kc, ytop = yt + Gmax * kc;
+    const rCon = y => {                                    // meia largura do concreto na cota y (papel)
+      if (!comBase) return D * kc / 2;
+      if (y < yb + Lb * kc) return Db * kc / 2;
+      if (y < yb + (Lb + La) * kc) return (Db / 2 - (Db - D) / 2 * (y - yb - Lb * kc) / (La * kc)) * kc;
+      return D * kc / 2;
+    };
+    const base = X.base;
+    const rotBase = base ? { n: base.n, txt: base.n + ' Ø' + fmt(base.phi, 1) + ' c/' + cm(base.esp) } : null;
+
+    // armadura do fuste (e malhas da base, na sapata) desenhada em corte, com eixo em xc
+    const armaduraCorte = xc => {
+      const x1 = rN1 * kc, x2 = rN2 * kc;
+      const zFundo = yb + cob * kc, zTopo = ytop - cob * kc, zEstrFim = S ? yb + (Lb + La) * kc : zFundo;
       P.L('ARX-CV-Armadura');
-      if (S) {                                           // N1 com pé de 20 cm apoiado na malha inferior (N4)
-        const pe = Math.max(0.2, n1Unit - (Lenc + Gmax - 2 * cob)) * k;
+      if (S) {                                              // N1 com pé apoiado na malha inferior (N4)
+        const pe = Math.max(0.2, n1Unit - (Lenc + Gmax - 2 * cob)) * kc;
         P.pl([[xc - x1 - pe, zFundo], [xc - x1, zFundo], [xc - x1, zTopo]], false, 0.3).pl([[xc + x1 + pe, zFundo], [xc + x1, zFundo], [xc + x1, zTopo]], false, 0.3);
       } else {
         P.pl([[xc - x1, zFundo], [xc - x1, zTopo]], false, 0.3).pl([[xc + x1, zFundo], [xc + x1, zTopo]], false, 0.3);
       }
-      for (let z = zTopo; z >= zEstrFim - 1e-6; z -= esp2 * k) P.ln(xc - x2, z, xc + x2, z);
-      if (S) {                                           // malhas da base: N4 embaixo (apoio do pé de N1) e N3 no topo da laje de borda
-        const b = X.base, rb = (Db / 2 - cob) * k, passo = b.esp / 100 * k;
-        const zN4 = yb + cob * k + 0.2, zN3 = yb + (Lb - cob) * k - 0.2;
+      for (let z = zTopo; z >= zEstrFim - 1e-6; z -= esp2 * kc) P.ln(xc - x2, z, xc + x2, z);
+      if (S) {                                              // malhas: N4 embaixo e N3 no topo da laje de borda
+        const rb = (Db / 2 - cob) * kc, zN4 = yb + cob * kc + 0.2, zN3 = yb + (Lb - cob) * kc - 0.2, rr = Math.max(base.phi / 2000 * kc, 0.35);
         P.ln(xc - rb, zN4 + 0.6, xc + rb, zN4 + 0.6).ln(xc - rb, zN3, xc + rb, zN3);
-        for (let j = 0; j < b.n; j++) {
-          const px = xc - rb + j * ((2 * rb) / Math.max(1, b.n - 1));
-          P.ci(px, zN4 - 0.2, Math.max(b.phi / 2000 * k, 0.35)).ci(px, zN3 - 0.7, Math.max(b.phi / 2000 * k, 0.35));
-        }
-        void passo;
+        for (let j = 0; j < base.n; j++) { const px = xc - rb + j * (2 * rb / Math.max(1, base.n - 1)); P.ci(px, zN4 - 0.2, rr).ci(px, zN3 - 0.7, rr); }
       }
-      // stub
-      const aw = aba * k, hh = hStub * k, ex = enterStub * k;
-      const b0 = [xc, ytop - ex], u = [Math.sin(thetaStub), Math.cos(thetaStub)], p = [Math.cos(thetaStub), -Math.sin(thetaStub)];
-      const q = (a, b) => [b0[0] + u[0] * a + p[0] * b, b0[1] + u[1] * a + p[1] * b];
-      P.L('STUB').pl([q(0, -aw / 2), q(0, aw / 2), q(hh, aw / 2), q(hh, -aw / 2)], true, 0.3);
-      P.L('ARX-GR-LCentro').ln(...q(-6, 0), ...q(hh + 6, 0));
-      // cotas
-      const xr = xc + Db * k / 2 + wLado + 14;
-      cotaV(P, xr, yt, ytop, xc + D * k / 2 + 8, 'G máx = ' + cm(Gmax * 100));
-      cotaV(P, xr - 9, yt, yt + Gmin * k, xc + D * k / 2 + 8, 'G mín = ' + cm(Gmin * 100));
-      cotaV(P, xr + 9, yb, yt, xr + 9, 'L = ' + cm(Lenc * 100));
-      cotaV(P, xr + 18, yb, ytop, xr + 18, 'H máx = ' + cm((Lenc + Gmax) * 100));
-      cotaH(P, xc - D * k / 2, xc + D * k / 2, ytop + hStub * k * Math.cos(thetaStub) + 7, ytop, Dn + ' = ' + cm(D * 100));
+    };
+
+    // corte da fundação: terreno, concreto, stub, cotas, distância ao marco central
+    const corte = (xc, opt) => {
+      const wLado = 14, xe = xc - Db * kc / 2 - wLado, xd = xc + Db * kc / 2 + wLado, xm = xc - 88, caixas = [];
+      const rotS = [];
+      if (opt.arm && S) {                                   // legendas das malhas, à esquerda, sobre o solo (abre espaço na hachura)
+        const xt = xc - Db * kc / 2 - 6, tN = 'N4 – ' + rotBase.txt, tN3 = 'N3 – ' + rotBase.txt;
+        rotS.push([xc - (Db / 2 - cob) * kc * 0.6, yb + cob * kc, xt, yb + 9, tN], [xc - (Db / 2 - cob) * kc * 0.75, yb + (Lb - cob) * kc, xt, yb + Lb * kc + 7, tN3]);
+        rotS.forEach(r => caixas.push([r[2] - 6 - 1.5 * r[4].length, r[3] - 3, r[2] + 1, r[3] + 3]));
+      }
+      P.L('ARX-GR-Solo').ln(xm - 6, yt, xe, yt).ln(xd, yt, xd + 6, yt);
+      P.L('ARX-GR-Solo').ln(xe, yt, xd, yt);
+      P.L('ARX-GR-Simbolo').ln((xm + xe) / 2 - 1.5, yt - 2.5, (xm + xe) / 2 + 0.5, yt + 2.5).ln((xm + xe) / 2 + 0.5, yt - 2.5, (xm + xe) / 2 + 2.5, yt + 2.5);   // interrupção do terreno
+      hachuraSolo(P, xe, xd, yb - 4, yt, 3.2, (x, yy) => (yy >= yb && Math.abs(x - xc) < rCon(yy)) || caixas.some(c => x >= c[0] && x <= c[2] && yy >= c[1] && yy <= c[3]));
+      P.L('ARX-GR-Solo').ln(xe, yb - 4, xe, yt).ln(xd, yb - 4, xd, yt);
+      const perfil = [];
       if (comBase) {
-        cotaH(P, xc - Db * k / 2, xc + Db * k / 2, yb - 8, yb, Dbn + ' = ' + cm(Db * 100));
-        cotaV(P, xc - Db * k / 2 - 16, yb, yb + Lb * k, xc - Db * k / 2, cm(Lb * 100));
-        cotaV(P, xc - Db * k / 2 - 16, yb + Lb * k, yb + (Lb + La) * k, xc - Db * k / 2, cm(La * 100));
-        if (S) cotaV(P, xc - Db * k / 2 - 16, yb + (Lb + La) * k, yt, xc - D * k / 2, cm((Lenc - Lb - La) * 100));
+        const rb = Db * kc / 2, rf = D * kc / 2;
+        perfil.push([xc - rb, yb], [xc + rb, yb], [xc + rb, yb + Lb * kc], [xc + rf, yb + (Lb + La) * kc], [xc + rf, ytop], [xc - rf, ytop], [xc - rf, yb + (Lb + La) * kc], [xc - rb, yb + Lb * kc]);
+      } else { const r = D * kc / 2; perfil.push([xc - r, yb], [xc + r, yb], [xc + r, ytop], [xc - r, ytop]); }
+      P.L('ARX-CV-Contorno').pl(perfil, true, 0.35);
+      P.L('ARX-GR-LTracejada').ln(xc - D * kc / 2 - 6, yt + Gmin * kc, xc + D * kc / 2 + 6, yt + Gmin * kc);
+      if (opt.arm) armaduraCorte(xc);
+      // stub (inclinado para fora, isto é, para longe do marco central)
+      const th = opt.theta, aw = aba * kc, hh = hStub * kc, ex = enterStub * kc;
+      const b0 = [xc, ytop - ex], u = [Math.sin(th), Math.cos(th)], pp = [Math.cos(th), -Math.sin(th)];
+      const q = (a, b) => [b0[0] + u[0] * a + pp[0] * b, b0[1] + u[1] * a + pp[1] * b];
+      P.L('STUB').pl([q(0, -aw / 2), q(0, aw / 2), q(hh, aw / 2), q(hh, -aw / 2)], true, 0.3);
+      const yTopStub = q(hh, 0)[1];
+      // eixos: da fundação e do marco central
+      P.L('ARX-GR-LCentro').ln(xc, yb - 10, xc, yTopStub + 8).ln(xm, yb - 10, xm, yTopStub + 22);
+      P.L('ARX-GR-Texto').tx(xm - 2, yTopStub - 30, 1.8, 'MARCO CENTRAL', 'center', 'baseline', 90);
+      // distância ao marco central (com interrupção, pois o desenho está em escala só na fundação)
+      const yd = yTopStub + 16, xmid = (xm + xc) / 2;
+      cotaH(P, xm, xc, yd, yd - 7, opt.rotuloDist + ' = ' + cm(opt.dist * 100), 2.0);
+      P.L('ARX-GR-Cota').ln(xmid - 3, yd - 1.8, xmid - 0.6, yd + 1.8).ln(xmid + 0.6, yd - 1.8, xmid + 3, yd + 1.8);
+      // cotas verticais e de largura, à direita
+      const bd = xc + Db * kc / 2;
+      if (comBase) {
+        cotaV(P, bd + 9, yb, yb + Lb * kc, bd, cm(Lb * 100), 1.8);
+        cotaV(P, bd + 9, yb + Lb * kc, yb + (Lb + La) * kc, bd, cm(La * 100), 1.8);
+        cotaV(P, bd + 9, yb + (Lb + La) * kc, yt, xc + D * kc / 2, cm((Lenc - Lb - La) * 100), 1.8);
+        cotaH(P, xc - Db * kc / 2, xc + Db * kc / 2, yb - 8, yb, Dbn + ' = ' + cm(Db * 100));
       }
-      // legendas
-      const yN2 = yt + Math.max(4, Gmax * k * 0.3), yN1 = yN2 + 9;   // legendas acima do terreno, ao lado do fuste
-      chamada(P, xc + x1, yN1 - 3, xc + D * k / 2 + 24, yN1, rotuloN1 + ' – C = ' + cm(n1Unit * 100), 2.1);
-      chamada(P, xc + x2, yN2 - 3, xc + D * k / 2 + 24, yN2, rotuloN2 + ' – C = ' + cm(n2CompCm), 2.1);
-      chamada(P, ...q(hh * 0.7, aw / 2), xc + D * k / 2 + 24, ytop + hh * 0.7 * Math.cos(thetaStub) + 3, 'STUB L ' + fmt(aba * 1000, 0) + 'x' + fmt(aba * 1000, 0) + 'x' + fmt(espStub * 1000, 1).replace(/,0$/, '') + ' mm', 2.1);
-      rotS.forEach(r => chamada(P, r[0], r[1], r[2], r[3], r[4], 2.1));
-      P.L('ARX-GR-Simbolo').pl([[xe - 6, yt + 0.1], [xe - 11, yt + 4.5], [xe - 1, yt + 4.5]], true);
-      P.L('ARX-GR-Texto').tx(xe - 12, yt + 6, 1.8, 'NÍVEL DO TERRENO', 'left', 'baseline');
-      tituloVista(P, 62, 22, 'ELEVAÇÃO', esc);
+      cotaV(P, bd + 19, yt, yt + Gmin * kc, xc + D * kc / 2 + 4, 'G mín = ' + cm(Gmin * 100), 1.9);
+      cotaV(P, bd + 28, yt, ytop, xc + D * kc / 2 + 4, 'G máx = ' + cm(Gmax * 100), 1.9);
+      cotaV(P, bd + 37, yb, yt, bd + 37, 'L = ' + cm(Lenc * 100), 1.9);
+      cotaV(P, bd + 46, yb, ytop, bd + 46, 'H máx = ' + cm((Lenc + Gmax) * 100), 1.9);
+      cotaH(P, xc - D * kc / 2, xc + D * kc / 2, ytop - 14, ytop - 8, Dn + ' = ' + cm(D * 100), 1.8);
+      // legendas (à esquerda, entre o marco central e a fundação)
+      const xt = xc - D * kc / 2 - 6;
+      const yS = Math.min(ytop - 24, q(hh * 0.5, 0)[1]);
+      if (opt.arm) {
+        const yN2 = yt + Math.max(4, Gmax * kc * 0.3), yN1 = yN2 + 9;
+        chamada(P, xc - rN1 * kc, yN1 - 3, xt - 14, yN1, rotuloN1 + ' – C = ' + cm(n1Unit * 100), 2.0);
+        chamada(P, xc - rN2 * kc, yN2 - 3, xt - 14, yN2, rotuloN2 + ' – C = ' + cm(n2CompCm), 2.0);
+        rotS.forEach(r => chamada(P, r[0], r[1], r[2], r[3], r[4], 2.0));
+      }
+      chamada(P, ...q(hh * 0.5, -aw / 2), xt - 14, ytop + 4, 'STUB L ' + fmt(aba * 1000, 0) + 'x' + fmt(aba * 1000, 0) + 'x' + fmt(espStub * 1000, 1).replace(/,0$/, '') + ' mm', 2.0);
+      void yS;
+      P.L('ARX-GR-Simbolo').pl([[xe - 4, yt + 0.1], [xe - 9, yt + 4.5], [xe + 1, yt + 4.5]], true);
+      P.L('ARX-GR-Texto').tx(xe - 10, yt + 6, 1.7, 'NÍVEL DO TERRENO', 'right', 'baseline');
+      tituloVista(P, xc - 40, 262, opt.titulo, escCorte);
+    };
+    corte(130, { titulo: 'ELEVAÇÃO', theta: thetaLong, dist: dyM, rotuloDist: 'DIST. AO MARCO CENTRAL (LONG.)', arm: false });
+    corte(335, { titulo: 'SEÇÃO A', theta: thetaTrans, dist: dxM, rotuloDist: 'DIST. AO MARCO CENTRAL (TRANSV.)', arm: true });
+
+    // ---------------- ARMADURA (gaiola, na mesma escala dos cortes) ----------------
+    {
+      const xc = 468;
+      armaduraCorte(xc);
+      const zFundo = yb + cob * kc, zTopo = ytop - cob * kc;
+      P.L('ARX-GR-LCentro').ln(xc, yb - 10, xc, ytop + 6);
+      cotaV(P, xc - rN1 * kc - 12, zFundo, zTopo, xc - rN1 * kc - 4, 'N1 – C = ' + cm(n1Unit * 100), 1.9);
+      const zE1 = ytop - cob * kc, zE2 = zE1 - esp2 * kc;
+      cotaV(P, xc + rN2 * kc + 9, zE2, zE1, xc + rN2 * kc + 1, 'c/' + cm(esp2 * 100), 1.7);
+      const xt = xc + rN2 * kc + 22;
+      chamada(P, xc + rN1 * kc, ytop - 30 * kc / 20 - 10, xt, ytop - 20, rotuloN1, 2.0);
+      chamada(P, xc + rN2 * kc, yt + Math.max(6, Gmax * kc * 0.3), xt, yt + Math.max(6, Gmax * kc * 0.3) + 4, rotuloN2 + ' (C = ' + cm(n2CompCm) + ')', 2.0);
+      P.L('ARX-GR-Texto').tx(xt, ytop - 28, 1.8, 'TRANSPASSE N1 = ' + cm(X.transp1), 'left', 'baseline');
+      if (S) {
+        chamada(P, xc + (Db / 2 - cob) * kc * 0.6, yb + cob * kc, xt, yb + 10, 'N4 – ' + rotBase.txt, 2.0);
+        chamada(P, xc + (Db / 2 - cob) * kc * 0.75, yb + (Lb - cob) * kc, xt, yb + Lb * kc + 8, 'N3 – ' + rotBase.txt, 2.0);
+        P.L('ARX-GR-Texto').tx(xt, yb + 2, 1.7, 'TRANSP. N3 = ' + cm(base.t3) + ' / N4 = ' + cm(base.t4), 'left', 'baseline');
+      }
+      tituloVista(P, xc - 38, 262, 'ARMADURA', escCorte);
     }
 
-    // ---------------- PLANTA ----------------
+    // ---------------- SEÇÃO B (corte com a armadura transversal) ----------------
     {
-      const esc = menorEscala(Db * 1000 + 600, Db * 1000 + 600, 118, 118);
-      const k = 1000 / esc, cx = 330, cy = 483;
-      const hD = D * k / 2, hDb = Db * k / 2;
+      const esc = menorEscala(D * 1000, D * 1000, 72, 72), k = 1000 / esc, cx = 584, cy = 522;
+      const hD = D * k / 2;
       if (S) {
-        const b = X.base, rb = (Db / 2 - cob) * k;
-        P.L('ARX-CV-Contorno').rect(cx - hDb, cy - hDb, cx + hDb, cy + hDb);
-        P.rect(cx - hD, cy - hD, cx + hD, cy + hD);
-        P.L('ARX-CV-Armadura');                           // malha N4 (N3 é igual e fica sobreposta)
-        for (let j = 0; j < b.n; j++) { const t = -rb + j * (2 * rb / Math.max(1, b.n - 1)); P.ln(cx + t, cy - rb, cx + t, cy + rb).ln(cx - rb, cy + t, cx + rb, cy + t); }
         P.L('ARX-CV-Contorno').rect(cx - hD, cy - hD, cx + hD, cy + hD);
         const h2 = rN2 * k; P.L('ARX-CV-Armadura').rect(cx - h2, cy - h2, cx + h2, cy + h2);
-        const h1 = rN1 * k, per = 8 * h1, pas = per / nBar;   // N1 distribuídas pelo perímetro
+        const h1 = rN1 * k, pas = 8 * h1 / nBar;
         for (let n = 0; n < nBar; n++) {
-          let t = n * pas, px, py;
+          const t = n * pas; let px, py;
           if (t < 2 * h1) { px = -h1 + t; py = -h1; } else if (t < 4 * h1) { px = h1; py = -h1 + (t - 2 * h1); } else if (t < 6 * h1) { px = h1 - (t - 4 * h1); py = h1; } else { px = -h1; py = h1 - (t - 6 * h1); }
           P.ci(cx + px, cy + py, Math.max(phi1 * k / 2, 0.45));
         }
-        cantoneira(P, cx, cy, aba * k, espStub * k, 45);
-        P.L('ARX-GR-LCentro').ln(cx - hDb - 8, cy, cx + hDb + 8, cy).ln(cx, cy - hDb - 8, cx, cy + hDb + 8);
-        cotaH(P, cx - hDb, cx + hDb, cy - hDb - 9, cy - hDb - 2, 'A = ' + cm(Db * 100));
-        cotaH(P, cx - hD, cx + hD, cy + hDb + 10, cy + hD, 'a = ' + cm(D * 100));
-        cotaV(P, cx + hDb + 10, cy - hDb, cy + hDb, cx + hDb, 'A = ' + cm(Db * 100));
-        chamada(P, cx + h1, cy + h1, cx + hDb + 16, cy + hDb + 3, rotuloN1, 2.1);
-        chamada(P, cx + h2, cy - h2 * 0.2, cx + hDb + 16, cy - hDb * 0.3, rotuloN2, 2.1);
-        chamada(P, cx + rb * 0.6, cy - rb, cx + hDb + 16, cy - hDb + 2, 'N3/N4 – ' + b.n + ' Ø' + fmt(b.phi, 1) + ' c/' + cm(b.esp), 2.1);
       } else {
         P.L('ARX-CV-Contorno').ci(cx, cy, hD);
-        if (comBase) P.L('ARX-GR-LTracejada').ci(cx, cy, hDb);
         P.L('ARX-CV-Armadura').ci(cx, cy, rN2 * k);
-        for (let b = 0; b < nBar; b++) { const a = 2 * Math.PI * b / nBar; P.ci(cx + rN1 * k * Math.cos(a), cy + rN1 * k * Math.sin(a), Math.max(phi1 * k / 2, 0.4)); }
-        cantoneira(P, cx, cy, aba * k, espStub * k, 45);
-        P.L('ARX-GR-LCentro').ln(cx - hDb - 8, cy, cx + hDb + 8, cy).ln(cx, cy - hDb - 8, cx, cy + hDb + 8);
-        cotaH(P, cx - hD, cx + hD, cy - hDb - 9, cy - hDb - 2, 'D = ' + cm(D * 100));
-        if (comBase) cotaH(P, cx - hDb, cx + hDb, cy - hDb - 18, cy - hDb - 2, 'Db = ' + cm(Db * 100));
-        cotaH(P, cx - hD, cx - hD + cob * k, cy + hDb + 10, cy + hD, cm(cob * 100), 1.8);
-        chamada(P, cx + rN1 * k * Math.cos(rad(40)), cy + rN1 * k * Math.sin(rad(40)), cx + hDb + 14, cy + hDb + 3, rotuloN1, 2.1);
-        chamada(P, cx + rN2 * k * Math.cos(rad(-25)), cy + rN2 * k * Math.sin(rad(-25)), cx + hDb + 14, cy - hDb + 2, rotuloN2, 2.1);
+        for (let b = 0; b < nBar; b++) { const a = 2 * Math.PI * b / nBar; P.ci(cx + rN1 * k * Math.cos(a), cy + rN1 * k * Math.sin(a), Math.max(phi1 * k / 2, 0.45)); }
       }
-      tituloVista(P, 262, 408, 'PLANTA', esc);
+      cantoneira(P, cx, cy, aba * k, espStub * k, 45);
+      P.L('ARX-GR-LCentro').ln(cx - hD - 7, cy, cx + hD + 7, cy).ln(cx, cy - hD - 7, cx, cy + hD + 7);
+      cotaH(P, cx - hD, cx + hD, cy - hD - 9, cy - hD - 2, Dn + ' = ' + cm(D * 100));
+      cotaH(P, cx - hD, cx - hD + cob * k, cy + hD + 9, cy + hD, cm(cob * 100), 1.7);
+      chamada(P, cx + rN1 * k * Math.cos(rad(40)), cy + rN1 * k * Math.sin(rad(40)), cx + hD + 4, cy + hD + 4, rotuloN1, 1.9);
+      chamada(P, cx + rN2 * k * Math.cos(rad(-30)), cy + rN2 * k * Math.sin(rad(-30)), cx + hD + 4, cy - hD * 0.2, rotuloN2, 1.9);
+      tituloVista(P, 566, 470, 'SEÇÃO B', esc);
     }
 
-    // ---------------- ARMADURA (em escala) ----------------
+    // ---------------- DETALHE 1 (stub: perfil em L) ----------------
     {
+      const esc = menorEscala(aba * 1000, aba * 1000, 46, 46), k = 1000 / esc, cx = 592, cy = 405;
+      cantoneira(P, cx, cy, aba * k, espStub * k, 0);
+      cotaH(P, cx - aba * k / 2, cx + aba * k / 2, cy - aba * k / 2 - 8, cy - aba * k / 2, fmt(aba * 1000, 0) + ' mm', 1.8);
+      cotaV(P, cx + aba * k / 2 + 8, cy - aba * k / 2, cy + aba * k / 2, cx + aba * k / 2, fmt(aba * 1000, 0), 1.8);
+      cotaH(P, cx - aba * k / 2, cx - aba * k / 2 + espStub * k, cy + aba * k / 2 + 6, cy + aba * k / 2, fmt(espStub * 1000, 1).replace(/,0$/, ''), 1.6);
+      P.L('ARX-GR-Texto').tx(cx, cy + aba * k / 2 + 11, 1.8, 'STUB – ALTURA REAL ' + fmt(hStub * 1000, 0) + ' mm', 'center', 'baseline').tx(cx, cy + aba * k / 2 + 14.5, 1.8, 'ENTERRADO ' + fmt(enterStub * 1000, 0) + ' mm', 'center', 'baseline');
+      tituloVista(P, 566, 358, 'DETALHE 1', esc);
+    }
+
+    // ---------------- MALHA DA BASE (só sapata) ----------------
+    if (S) {
+      const esc = menorEscala(Db * 1000, Db * 1000, 70, 70), k = 1000 / esc, cx = 590, cy = 322, hDb = Db * k / 2, rb = (Db / 2 - cob) * k;
+      P.L('ARX-CV-Contorno').rect(cx - hDb, cy - hDb, cx + hDb, cy + hDb);
+      P.L('ARX-CV-Armadura');
+      for (let j = 0; j < base.n; j++) { const t = -rb + j * (2 * rb / Math.max(1, base.n - 1)); P.ln(cx + t, cy - rb, cx + t, cy + rb).ln(cx - rb, cy + t, cx + rb, cy + t); }
+      P.L('ARX-CV-Contorno').rect(cx - D * k / 2, cy - D * k / 2, cx + D * k / 2, cy + D * k / 2);
+      cotaH(P, cx - hDb, cx + hDb, cy - hDb - 8, cy - hDb - 1, 'A = ' + cm(Db * 100), 1.8);
+      chamada(P, cx + rb * 0.6, cy + rb, cx + hDb + 3, cy + hDb + 3, 'N3/N4 – ' + rotBase.txt, 1.8);
+      tituloVista(P, 566, 282, 'MALHA DA BASE', esc);
+    }
+
+    // ---------------- PLANTA (locação de um pé em relação ao marco central) ----------------
+    {
+      const esc = menorEscala(dxM * 1000 + 700, dyM * 1000 + 700, 118, 150), k = 1000 / esc;
+      const xM = 52, yM = 225, xF = xM + dxM * k, yF = yM - dyM * k;
+      const hD = D * k / 2, hDb = Db * k / 2;
+      P.L('ARX-GR-LCentro').ln(xM - 18, yM, xF + hDb + 24, yM);
+      (dl > 0 ? [90 - dl / 2, 90 + dl / 2] : [90]).forEach(a => { const c = Math.cos(rad(a)), s = Math.sin(rad(a)), L2 = (yM - yF) + hDb + 12; P.ln(xM + 14 * c, yM + 14 * s, xM - L2 * c, yM - L2 * s); });
+      P.L('ARX-GR-Simbolo').ci(xM, yM, 2.2).ln(xM - 3.5, yM, xM + 3.5, yM).ln(xM, yM - 3.5, xM, yM + 3.5);
+      P.L('ARX-GR-Texto').tx(xM + 4, yM + 3, 1.8, 'MARCO CENTRAL', 'left', 'baseline');
+      P.L('ARX-GR-LAuxiliar').ln(xM, yM, xF, yF);
       if (S) {
-        // N1: barra com pé, desenhada de pé
-        const altN1 = Lenc + Gmax - 2 * cob, escN1 = menorEscala(altN1 * 1000, altN1 * 1000, 95, 95), kN1 = 1000 / escN1;
-        const bx = 462, by = 470, pe = Math.max(0.2, n1Unit - altN1) * kN1;
-        P.L('ARX-CV-Armadura').pl([[bx + pe, by], [bx, by], [bx, by + altN1 * kN1]], false, 0.5);
-        cotaV(P, bx - 8, by, by + altN1 * kN1, bx, cm(altN1 * 100));
-        cotaH(P, bx, bx + pe, by - 7, by, cm(pe / kN1 * 100), 1.8);
-        P.L('ARX-GR-Texto').tx(bx + 6, by + altN1 * kN1 - 3, 2.2, 'N1 – ' + nBar + ' Ø' + fmt(X.phi1, 1), 'left', 'baseline').tx(bx + 6, by + altN1 * kN1 - 7, 2.0, 'C = ' + cm(n1Unit * 100) + ' (PÉ DE ' + cm(pe / kN1 * 100) + ')', 'left', 'baseline').tx(bx + 6, by + altN1 * kN1 - 11, 2.0, 'TRANSPASSE = ' + cm(X.transp1), 'left', 'baseline');
-        tituloVista(P, 482, 452, 'ARMADURA N1', escN1);
-        // N2: estribo quadrado
-        const lado = D - 2 * cob - phi2, escN2 = menorEscala(lado * 1000, lado * 1000, 62, 62), kN2 = 1000 / escN2, cx = 565, cy = 512;
-        P.L('ARX-CV-Armadura').rect(cx - lado * kN2 / 2, cy - lado * kN2 / 2, cx + lado * kN2 / 2, cy + lado * kN2 / 2);
-        cotaH(P, cx - lado * kN2 / 2, cx + lado * kN2 / 2, cy - lado * kN2 / 2 - 8, cy - lado * kN2 / 2 - 1, cm(lado * 100));
-        P.L('ARX-GR-Texto').tx(cx + lado * kN2 / 2 + 6, cy + 3, 2.2, rotuloN2, 'left', 'baseline').tx(cx + lado * kN2 / 2 + 6, cy - 1.5, 2.0, 'C = ' + cm(n2CompCm), 'left', 'baseline');
-        tituloVista(P, 579, 452, 'ARMADURA N2', escN2);
-        // N3/N4: barra reta da malha
-        const b = X.base, cbar = Db - 2 * cob, escB = menorEscala(cbar * 1000, 1, 150, 1), kB = 1000 / escB, bx2 = 470, by2 = 425;
-        P.L('ARX-CV-Armadura').pl([[bx2, by2], [bx2 + cbar * kB, by2]], false, 0.5);
-        cotaH(P, bx2, bx2 + cbar * kB, by2 + 7, by2, 'C = ' + cm(cbar * 100));
-        P.L('ARX-GR-Texto').tx(bx2, by2 + 14, 2.2, 'N3/N4 – ' + b.n + ' Ø' + fmt(b.phi, 1) + ' c/' + cm(b.esp) + ' POR DIREÇÃO', 'left', 'baseline').tx(bx2, by2 - 6, 1.9, 'TRANSPASSE N3 = ' + cm(b.t3) + ' / N4 = ' + cm(b.t4), 'left', 'baseline');
-        tituloVista(P, 484, 400, 'ARMADURA N3 / N4', escB);
+        P.L('ARX-CV-Contorno').rect(xF - hDb, yF - hDb, xF + hDb, yF + hDb);
+        P.L('ARX-GR-LTracejada').rect(xF - hD, yF - hD, xF + hD, yF + hD);
       } else {
-        const escN1 = menorEscala(n1Unit * 1000, 1, 185, 1), kN1 = 1000 / escN1;
-        const x1 = 455, y1 = 520, L1 = n1Unit * kN1;
-        P.L('ARX-CV-Armadura').pl([[x1, y1], [x1 + L1, y1]], false, 0.5);
-        P.L('ARX-GR-LTracejada').ln(x1 + L1 - X.transp1 / 100 * kN1, y1 - 3, x1 + L1, y1 - 3);
-        P.L('ARX-GR-Texto').tx(x1 + L1 - X.transp1 / 200 * kN1, y1 - 7, 1.8, 'TRANSPASSE = ' + cm(X.transp1), 'center', 'baseline');
-        cotaH(P, x1, x1 + L1, y1 + 8, y1, 'C = ' + cm(n1Unit * 100));
-        P.L('ARX-GR-Texto').tx(x1, y1 + 15, 2.3, 'N1 – ' + nBar + ' Ø' + fmt(X.phi1, 1) + ' – BARRAS LONGITUDINAIS', 'left', 'baseline');
-        tituloVista(P, 469, 497, 'ARMADURA N1', escN1);
-        const dN2 = D - 2 * cob - phi2, escN2 = menorEscala(dN2 * 1000, dN2 * 1000, 62, 62), kN2 = 1000 / escN2;
-        const cx = 505, cy = 448;
-        P.L('ARX-CV-Armadura').ci(cx, cy, dN2 * kN2 / 2);
-        cotaH(P, cx - dN2 * kN2 / 2, cx + dN2 * kN2 / 2, cy - dN2 * kN2 / 2 - 8, cy - dN2 * kN2 / 2 - 1, 'Ø ' + cm(dN2 * 100));
-        P.L('ARX-GR-Texto').tx(cx + dN2 * kN2 / 2 + 8, cy + 3, 2.3, rotuloN2, 'left', 'baseline');
-        P.tx(cx + dN2 * kN2 / 2 + 8, cy - 1.5, 2.1, 'C = ' + cm(n2CompCm) + ' (COM TRANSPASSE)', 'left', 'baseline');
-        tituloVista(P, 469, 408, 'ARMADURA N2', escN2);
+        P.L('ARX-CV-Contorno').ci(xF, yF, hD);
+        if (comBase) P.L('ARX-GR-LTracejada').ci(xF, yF, hDb);
       }
-      P.L('ARX-GR-Texto');
-      [['COBRIMENTO', cm(cob * 100) + ' cm'], ['CONCRETO', 'fck ≥ ' + M.fck_mpa + ' MPa'], ['AÇO', aco]].forEach((r, ii) => { P.tx(580, S ? 560 - ii * 4.2 : 462 - ii * 4.2, 2, r[0] + ': ' + r[1], 'left', 'baseline'); });
+      cantoneira(P, xF, yF, Math.max(aba * k, 1.4), Math.max(espStub * k, 0.3), -45);
+      P.L('ARX-GR-Texto').tx(xF + hDb + 3, yF + hDb + 2, 2.2, 'PÉ "A"', 'left', 'baseline');
+      cotaH(P, xM, xF, yF - hDb - 9, yF - hDb - 1, cm(dxM * 100), 1.9);
+      cotaV(P, xF + hDb + 12, yF, yM, xF + hDb + 1, cm(dyM * 100), 1.9);
+      const dd = Math.hypot(dxM, dyM), ang = Math.atan2(yF - yM, xF - xM) * 180 / Math.PI;
+      P.L('ARX-GR-Texto').tx((xM + xF) / 2 - 2.5 * Math.sin(rad(-ang)), (yM + yF) / 2 + 2.5 * Math.cos(rad(-ang)), 1.9, cm(dd * 100) + ' (DIAGONAL)', 'center', 'baseline', ang);
+      tituloVista(P, 54, 25, 'PLANTA – LOCAÇÃO DO PÉ', esc);
     }
 
-    // ---------------- LOCAÇÃO DAS FUNDAÇÕES ----------------
+    // ---------------- LOCAÇÃO GERAL DAS FUNDAÇÕES ----------------
     {
-      const bt = num(geom.base_transversal_m, 6), bl = num(geom.base_longitudinal_m, 6), dl = num(geom.deflexao_graus, 0);
-      const esc = menorEscala((bt + Db + 1.2) * 1000, (bl + Db + 1.2) * 1000, 160, 150), k = 1000 / esc;
-      const cx = 332, cy = 300;
+      const esc = menorEscala((bt + Db + 1.2) * 1000, (bl + Db + 1.2) * 1000, 160, 170), k = 1000 / esc;
+      const cx = 272, cy = 138;
       const pes = [['A', -1, 1], ['B', 1, 1], ['C', 1, -1], ['D', -1, -1]];
       pes.forEach((e, ii) => {
         const nx = pes[(ii + 1) % 4];
@@ -420,24 +442,21 @@
         cantoneira(P, px, py, Math.max(aba * k, 1.2), Math.max(espStub * k, 0.25), e[1] * e[2] > 0 ? -45 : 45);
         P.L('ARX-GR-Texto').tx(px + (e[1] > 0 ? 1 : -1) * (Db * k / 2 + 2), py + (e[2] > 0 ? 1 : -1) * (Db * k / 2 + 2) - (e[2] > 0 ? 0 : 2), 2.4, 'PÉ "' + e[0] + '"', e[1] > 0 ? 'left' : 'right', 'baseline');
       });
-      // eixos: bissetriz (horizontal) e diretriz(es) da LT
       const ext = Math.max(bt, bl) / 2 * k + Db * k / 2 + 14;
       P.L('ARX-GR-LCentro').ln(cx - ext, cy, cx + ext, cy);
-      const dirs = dl > 0 ? [90 - dl / 2, 90 + dl / 2] : [90];
-      dirs.forEach(a => P.ln(cx - ext * Math.cos(rad(a)), cy - ext * Math.sin(rad(a)), cx + ext * Math.cos(rad(a)), cy + ext * Math.sin(rad(a))));
+      (dl > 0 ? [90 - dl / 2, 90 + dl / 2] : [90]).forEach(a => P.ln(cx - ext * Math.cos(rad(a)), cy - ext * Math.sin(rad(a)), cx + ext * Math.cos(rad(a)), cy + ext * Math.sin(rad(a))));
       P.L('ARX-GR-Simbolo').ci(cx, cy, 2.2).ln(cx - 3.5, cy, cx + 3.5, cy).ln(cx, cy - 3.5, cx, cy + 3.5);
       P.L('ARX-GR-Texto').tx(cx + 3, cy - 8, 1.8, 'MARCO CENTRAL', 'left', 'baseline');
       P.tx(cx + ext, cy + 1.5, 1.8, 'BISSETRIZ DO ÂNGULO DA LINHA', 'right', 'baseline', 0);
       P.tx(cx - 1, cy + ext - 1, 1.8, 'DIRETRIZ DA LT', 'right', 'baseline', 90);
       cotaH(P, cx - bt / 2 * k, cx + bt / 2 * k, cy - bl / 2 * k - Db * k / 2 - 9, cy - bl / 2 * k, cm(bt * 100));
       cotaV(P, cx + bt / 2 * k + Db * k / 2 + 11, cy - bl / 2 * k, cy + bl / 2 * k, cx + bt / 2 * k, cm(bl * 100));
-      tituloVista(P, 262, 218, 'LOCAÇÃO DAS FUNDAÇÕES', esc);
+      tituloVista(P, 200, 25, 'LOCAÇÃO DAS FUNDAÇÕES', esc);
     }
 
     // ---------------- TABELA 2: LISTA DE FERRO POR FUNDAÇÃO ----------------
     {
-      const lin = X.linhas, x0t = 440;
-      // colunas: [cabeçalho, largura, valor(l)]; grupos: [título, nº de colunas]
+      const lin = X.linhas, x0t = 380;
       const colunas = S ? [
         ['G (cm)', 15, l => cm(l.G_cm)], ['H (m)', 14, l => fmt(l.H_m, 2)], ['CONCR. (m³)', 19, l => fmt(l.concreto_m3, 2)], ['ESCAV. (m³)', 19, l => fmt(l.escavacao_m3, 2)],
         ['REATERRO (m³)', 22, l => fmt(l.reaterro_m3, 2)],
@@ -449,9 +468,9 @@
         ['COMPR. (m)', 22, l => fmt(l.n1_comp_unit_m, 2)], ['PESO (kgf)', 16, l => fmt(l.n1_peso_kgf, 0)], ['COMPR. TOT. (m)', 22, l => fmt(l.n1_comp_total_m, 1)],
         ['QUANT. n', 16, l => l.n2_quantidade], ['COMPR. TOT. (m)', 24, l => fmt(l.n2_comp_total_m, 1)], ['PESO (kgf)', 22, l => fmt(l.n2_peso_kgf, 0)], ['TOTAL (kgf)', 26, l => fmt(l.peso_total_kgf, 0)],
       ];
-      const gDim = S ? 5 : 4, gN1 = S ? 2 : 3, gN2 = S ? 2 : 3;     // colunas por grupo (dimensões, N1, N2); o resto é peso
+      const gDim = S ? 5 : 4, gN1 = S ? 2 : 3, gN2 = S ? 2 : 3;
       const w = colunas.map(c => c[1]), W = w.reduce((a, b) => a + b, 0);
-      const topo = 208, hl = Math.min(5.4, (topo - 20 - 25) / (lin.length + 0.01));
+      const topo = 232, hl = Math.min(5.4, (topo - 22 - 25) / (lin.length + 0.01));
       const yy = n => topo - 16 - n * hl;
       const xs = [x0t]; w.forEach(v => xs.push(xs[xs.length - 1] + v));
       const gx = [0, gDim, gDim + gN1, gDim + gN1 + gN2, colunas.length].map(j => xs[j]);
@@ -463,7 +482,6 @@
       const gt = [[gx[0], gx[1], 'DIMENSÕES VARIÁVEIS E VOLUMES'], [gx[1], gx[3], 'LISTA DE FERRO POR FUNDAÇÃO'], [gx[3], gx[4], 'PESO']];
       P.L('ARX-GR-Texto');
       gt.forEach(g => P.tx((g[0] + g[1]) / 2, topo - 3.4, 1.6, g[2], 'center', 'baseline'));
-      // subgrupos N1 / N2 (linha intermediária)
       P.L('FORMATO');
       const n1a = xs[gDim], n1b = xs[gDim + gN1], n2b = xs[gDim + gN1 + gN2];
       P.ln(n1a, topo - 10.5, n2b, topo - 10.5).ln(n1b, topo - 10.5, n1b, topo - 5);
