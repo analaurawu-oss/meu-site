@@ -297,13 +297,13 @@
     const n0 = menorEscala(Db * 1000, (H - (qb ? qb.rem : 0) + 0.35 + vis + 0.1) * 1000, 70, 160);
     const escCorte = Math.max(n0, menorEscala(dD * 1000, 1, 135, 1));    // a distância ao marco central também precisa caber
     const kc = 1000 / escCorte;                                          // mm de papel por metro real
-    const sag = qb ? Math.min(0.3 * D * kc, 7) : 0;                      // flecha das curvas de ruptura
-    const yLowTop = qb ? yb + qb.z1 * kc : 0, yUpBot = qb ? yLowTop + 6 + sag : 0;
+    const sA = qb ? Math.max(0.32 * D * kc / 2, 3.4) : 0, sB = 0.85 * sA, sC = 0.29 * sA;   // flechas das curvas de ruptura (tigela, calombo e lente), como no modelo
+    const yLowTop = qb ? yb + qb.z1 * kc : 0, yUpBot = qb ? yLowTop + sA + sB + 4 : 0;       // linhas-base do topo da peça de baixo e do fundo da peça de cima
     const Y = z => (!qb || z <= qb.z1) ? yb + z * kc : yUpBot + (z - qb.z2) * kc;
     const visZ = z => !qb || z <= qb.z1 || z >= qb.z2;
     const yt = Y(Lenc), ytop = Y(H), slope = Math.max(0.05 * kc, 1.6);
-    const arcoSup = (xc, r, yc, s, de, ate) => { const p = [], n = 16; for (let k = 0; k <= n; k++) { const x = de + (ate - de) * k / n; p.push([xc + x, yc - s * (x / r) * (x / r)]); } return p; };
-    const arcoInf = (xc, r, yc, s, de, ate) => { const p = [], n = 16; for (let k = 0; k <= n; k++) { const x = de + (ate - de) * k / n; p.push([xc + x, yc + s * (x / r) * (x / r)]); } return p; };
+    // arco parabólico entre x1 e x2 (relativos ao eixo xc), com flecha sg (positiva para cima), na altura y0
+    const arcoP = (xc, x1, x2, y0, sg) => { const p = [], n = 14, xm = (x1 + x2) / 2, h = Math.abs(x2 - x1) / 2; for (let k = 0; k <= n; k++) { const x = x1 + (x2 - x1) * k / n, t = (x - xm) / h; p.push([xc + x, y0 + sg * (1 - t * t)]); } return p; };
     const marcaQuebra = (x, y) => { const prev = P.cur; P.L('ARX-GR-Cota').ln(x - 2.2, y - 2.2, x + 0.4, y + 1.2).ln(x - 0.4, y - 1.2, x + 2.2, y + 2.2); P.L(prev); };
     const quebraDim = x => { if (qb) marcaQuebra(x, (yLowTop + yUpBot) / 2); };
 
@@ -312,11 +312,16 @@
       const r = D * kc / 2, rb = Db * kc / 2, topo = [[xc + r, ytop - slope], [xc, ytop], [xc - r, ytop - slope]];
       P.L(camada);
       if (qb) {
+        // peça de baixo: topo com calombo à direita (sB) e curva suave à esquerda (sC), mais a lente inferior à esquerda (tigela sA)
+        const curvaTopo = arcoP(xc, r, 0, yLowTop, sB).slice(1).concat(arcoP(xc, 0, -r, yLowTop, sC).slice(1));
         let baixo;
-        if (comBase) baixo = [[xc - rb, yb], [xc + rb, yb], [xc + rb, yb + Lb * kc], [xc + r, yb + (Lb + La) * kc], [xc + r, yLowTop - sag]].concat(arcoSup(xc, r, yLowTop, sag, r, -r).slice(1)).concat([[xc - r, yb + (Lb + La) * kc], [xc - rb, yb + Lb * kc]]);
-        else baixo = [[xc - r, yb], [xc + r, yb], [xc + r, yLowTop - sag]].concat(arcoSup(xc, r, yLowTop, sag, r, -r).slice(1));
+        if (comBase) baixo = [[xc - rb, yb], [xc + rb, yb], [xc + rb, yb + Lb * kc], [xc + r, yb + (Lb + La) * kc], [xc + r, yLowTop]].concat(curvaTopo, [[xc - r, yb + (Lb + La) * kc], [xc - rb, yb + Lb * kc]]);
+        else baixo = [[xc - r, yb], [xc + r, yb], [xc + r, yLowTop]].concat(curvaTopo);
         P.pl(baixo, true, 0.35);
-        P.pl([[xc - r, ytop - slope]].concat(arcoInf(xc, r, yUpBot, sag, -r, r), topo.slice(0, 2)), true, 0.35);
+        P.pl(arcoP(xc, -r, 0, yLowTop, -sA), false, 0.35);
+        // peça de cima: fundo com tigela à esquerda (sA) e curva suave à direita (sC), mais a lente superior à direita (calombo sB)
+        P.pl([[xc - r, ytop - slope], [xc - r, yUpBot]].concat(arcoP(xc, -r, 0, yUpBot, -sA).slice(1), arcoP(xc, 0, r, yUpBot, -sC).slice(1), topo.slice(0, 2)), true, 0.35);
+        P.pl(arcoP(xc, r, 0, yUpBot, sB), false, 0.35);
       } else if (comBase) {
         P.pl([[xc - rb, yb], [xc + rb, yb], [xc + rb, yb + Lb * kc], [xc + r, yb + (Lb + La) * kc]].concat(topo, [[xc - r, yb + (Lb + La) * kc], [xc - rb, yb + Lb * kc]]), true, 0.35);
       } else P.pl([[xc - r, yb], [xc + r, yb]].concat(topo), true, 0.35);
@@ -339,7 +344,7 @@
       const pe = S ? Math.max(0.2, n1Unit - (Lenc + Gmax - 2 * cob)) * kc : 0;
       const barra = xo => {
         const ex = Math.abs(xo) / r;
-        if (qb) P.pl([[xc + xo, zFundo], [xc + xo, yLowTop - sag * ex * ex - 0.6]], false, 0.3).pl([[xc + xo, yUpBot + sag * ex * ex + 0.6], [xc + xo, zTopo]], false, 0.3);
+        if (qb) P.pl([[xc + xo, zFundo], [xc + xo, yLowTop - sA - 0.6]], false, 0.3).pl([[xc + xo, yUpBot + sB + 0.6], [xc + xo, zTopo]], false, 0.3);
         else if (pe) P.pl([[xc + xo + Math.sign(xo) * pe, zFundo], [xc + xo, zFundo], [xc + xo, zTopo]], false, 0.3);
         else P.pl([[xc + xo, zFundo], [xc + xo, zTopo]], false, 0.3);
       };
@@ -347,7 +352,7 @@
       for (let z = H - cob; z >= (S ? Lb + La : cob) - 1e-6; z -= esp2) {
         const y = Y(z);
         if (!visZ(z)) continue;
-        if (qb && ((z <= qb.z1 && y > yLowTop - sag - 0.6) || (z >= qb.z2 && y < yUpBot + sag + 0.6))) continue;
+        if (qb && ((z <= qb.z1 && y > yLowTop - sA - 0.6) || (z >= qb.z2 && y < yUpBot + sB + 0.6))) continue;
         if (y > ytop - slope - 0.5) continue;
         P.ln(xc - x2, y, xc + x2, y);
       }
